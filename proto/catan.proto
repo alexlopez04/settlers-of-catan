@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package catan;
+
+/* ============================= */
+/* ===== Top-Level Envelope ==== */
+/* ============================= */
+
+message Envelope {
+  uint32 protocol_version = 1;
+  DeviceRole source_role = 2;
+  uint32 source_id = 3; // 0 = central, 1-4 = players
+  MessageType type = 4;
+  bytes payload = 5;
+}
+
+/* ============================= */
+/* ===== Device Identity ======= */
+/* ============================= */
+
+enum DeviceRole {
+  UNKNOWN = 0;
+  CENTRAL = 1;
+  PLAYER_STATION = 2;
+}
+
+/* ============================= */
+/* ===== Message Routing ======= */
+/* ============================= */
+
+enum MessageType {
+  NONE = 0;
+
+  // Central → Players
+  SYSTEM_STATE = 1;
+  HIGHLIGHT_TILES = 2;
+  TURN_UPDATE = 3;
+  DICE_RESULT = 4;
+
+  // Player → Central
+  PLAYER_CONNECTED = 10;
+  ADVANCE_SETUP = 11;
+  ROLL_DICE = 12;
+}
+
+/* ============================= */
+/* ===== System State ========== */
+/* ============================= */
+
+message SystemState {
+  Phase phase = 1;
+  uint32 connected_players = 2;
+}
+
+enum Phase {
+  WAITING_FOR_PLAYERS = 0;
+  TILE_SETUP = 1;
+  GAME_RUNNING = 2;
+}
+
+/* ============================= */
+/* ===== Game Running ========== */
+/* ============================= */
+
+message TurnUpdate {
+  uint32 current_player_id = 1;
+}
+
+message DiceResult {
+  uint32 player_id = 1;
+  uint32 die_one = 2;
+  uint32 die_two = 3;
+  uint32 total = 4;
+}

@@ -1,0 +1,18 @@
+# PlatformIO
+.pio/
+
+# Generated files and build artifacts
+*_gen/
+build/
+*.o
+*.bin
+*.elf
+*.map
+*.hex
+*.log
+
+# MacOS metadata files
+.DS_Store
+
+# Windows
+Thumbs.db
