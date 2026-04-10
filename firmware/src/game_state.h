@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "config.h"
+#include "board_types.h"
 
 // ── Game phases ─────────────────────────────────────────────────────────────
 enum class GamePhase : uint8_t {

@@ -1,9 +1,13 @@
 // =============================================================================
 // led_manager.cpp — Addressable LED control.
+//
+// Uses led_map tables for flexible LED-to-strip mapping (any number of
+// LEDs per tile/port) and board_topology for biome lookups.
 // =============================================================================
 
 #include "led_manager.h"
-#include "board_layout.h"
+#include "board_topology.h"
+#include "led_map.h"
 
 namespace {
     CRGB leds[TOTAL_LED_COUNT];
@@ -36,9 +40,10 @@ void init() {
 
 void setTileColor(uint8_t tile_id, const CRGB& color) {
     if (tile_id >= TILE_COUNT) return;
-    const Tile& t = g_tiles[tile_id];
-    leds[t.led_index_a] = color;
-    leds[t.led_index_b] = color;
+    const TileLedMap& m = TILE_LED_MAP[tile_id];
+    for (uint8_t i = 0; i < m.count; ++i) {
+        leds[m.indices[i]] = color;
+    }
     tile_base_color[tile_id] = color;
 }
 
@@ -52,7 +57,10 @@ void setAllTiles(const CRGB& color) {
 
 void setPortColor(uint8_t port_id, const CRGB& color) {
     if (port_id >= PORT_COUNT) return;
-    leds[g_ports[port_id].led_index] = color;
+    const PortLedMap& m = PORT_LED_MAP[port_id];
+    for (uint8_t i = 0; i < m.count; ++i) {
+        leds[m.indices[i]] = color;
+    }
 }
 
 void setAllPorts(const CRGB& color) {
@@ -65,7 +73,7 @@ void setAllPorts(const CRGB& color) {
 
 void colorTileByBiome(uint8_t tile_id) {
     if (tile_id >= TILE_COUNT) return;
-    setTileColor(tile_id, biomeColor(g_tiles[tile_id].biome));
+    setTileColor(tile_id, biomeColor(g_tile_state[tile_id].biome));
 }
 
 void colorAllTilesByBiome() {
@@ -79,14 +87,12 @@ void colorAllTilesByBiome() {
 void flashTiles(const uint8_t* tile_ids, uint8_t num_tiles,
                 const CRGB& color, uint8_t count, uint16_t interval_ms) {
     for (uint8_t c = 0; c < count; ++c) {
-        // On
         for (uint8_t i = 0; i < num_tiles; ++i) {
             setTileColor(tile_ids[i], color);
         }
         show();
         delay(interval_ms);
 
-        // Off (restore base)
         for (uint8_t i = 0; i < num_tiles; ++i) {
             colorTileByBiome(tile_ids[i]);
         }
@@ -106,18 +112,20 @@ void highlightTile(uint8_t tile_id, const CRGB& color, uint16_t duration_ms) {
 
 void dimTile(uint8_t tile_id) {
     if (tile_id >= TILE_COUNT) return;
-    const Tile& t = g_tiles[tile_id];
     CRGB dimmed = tile_base_color[tile_id];
     dimmed.nscale8(64);  // ~25% brightness
-    leds[t.led_index_a] = dimmed;
-    leds[t.led_index_b] = dimmed;
+    const TileLedMap& m = TILE_LED_MAP[tile_id];
+    for (uint8_t i = 0; i < m.count; ++i) {
+        leds[m.indices[i]] = dimmed;
+    }
 }
 
 void undimTile(uint8_t tile_id) {
     if (tile_id >= TILE_COUNT) return;
-    const Tile& t = g_tiles[tile_id];
-    leds[t.led_index_a] = tile_base_color[tile_id];
-    leds[t.led_index_b] = tile_base_color[tile_id];
+    const TileLedMap& m = TILE_LED_MAP[tile_id];
+    for (uint8_t i = 0; i < m.count; ++i) {
+        leds[m.indices[i]] = tile_base_color[tile_id];
+    }
 }
 
 // ── Show / Clear ────────────────────────────────────────────────────────────

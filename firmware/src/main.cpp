@@ -13,7 +13,8 @@
 #include <Wire.h>
 
 #include "config.h"
-#include "board_layout.h"
+#include "board_types.h"
+#include "board_topology.h"
 #include "led_manager.h"
 #include "sensor_manager.h"
 #include "button_manager.h"
@@ -37,6 +38,7 @@ static CRGB portColor(PortType pt) {
         case PortType::BRICK_2_1:   return CRGB(178, 34, 34);
         case PortType::ORE_2_1:     return CRGB(128, 128, 128);
         case PortType::GENERIC_3_1: return CRGB::White;
+        case PortType::PORT_NONE:   return CRGB::Black;
         default:                    return CRGB::Black;
     }
 }
@@ -167,7 +169,7 @@ static void handleBoardSetup() {
 
     // Find the desert tile and place the robber there
     for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        if (g_tiles[t].biome == Biome::DESERT) {
+        if (g_tile_state[t].biome == Biome::DESERT) {
             game::setRobberTile(t);
             break;
         }
@@ -178,7 +180,7 @@ static void handleBoardSetup() {
 
     // Light ports
     for (uint8_t p = 0; p < PORT_COUNT; ++p) {
-        led::setPortColor(p, portColor(g_ports[p].type));
+        led::setPortColor(p, portColor(PORT_TOPO[p].type));
     }
     led::show();
 
@@ -186,11 +188,15 @@ static void handleBoardSetup() {
     for (uint8_t t = 0; t < TILE_COUNT; ++t) {
         Serial.print(F("[TILE] "));
         Serial.print(t);
-        Serial.print(F(" "));
-        Serial.print(biomeName(g_tiles[t].biome));
-        if (g_tiles[t].number > 0) {
+        Serial.print(F(" ("));
+        Serial.print(TILE_TOPO[t].coord.q);
+        Serial.print(F(","));
+        Serial.print(TILE_TOPO[t].coord.r);
+        Serial.print(F(") "));
+        Serial.print(biomeName(g_tile_state[t].biome));
+        if (g_tile_state[t].number > 0) {
             Serial.print(F(" #"));
-            Serial.print(g_tiles[t].number);
+            Serial.print(g_tile_state[t].number);
         }
         Serial.println();
     }
@@ -222,7 +228,7 @@ static void handleNumberReveal() {
 
         // Highlight only tiles that match this number
         for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-            if (g_tiles[t].number == num) {
+            if (g_tile_state[t].number == num) {
                 led::setTileColor(t, CRGB::White);
             }
         }
@@ -285,7 +291,7 @@ static void handlePlaying() {
         uint8_t matching[TILE_COUNT];
         uint8_t match_count = 0;
         for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-            if (g_tiles[t].number == total && t != game::robberTile()) {
+            if (g_tile_state[t].number == total && t != game::robberTile()) {
                 matching[match_count++] = t;
             }
         }
