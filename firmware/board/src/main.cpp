@@ -1,24 +1,28 @@
 #include <Arduino.h>
-#include "catan.pb.h"
-#include "pb_encode.h"
-#include "pb_decode.h"
+#include <Wire.h>
 
-#define SERIAL_BAUD 115200
-
-// Simple state
-uint8_t connected_players = 0;
-uint32_t current_tile_index = 0;
-_catan_Phase game_phase = catan_Phase_WAITING_FOR_PLAYERS;
+#define ESP_1_ADDR 0x10
 
 void setup() {
-    Serial.begin(SERIAL_BAUD);
-    while (!Serial) { ; }  // Wait for serial
-
-    Serial.println("Central board initialized!");
+    Serial.begin(115200);
+    Wire.begin();
+    Wire.setClock(100000);
+    Serial.println("Mega ready — sending test messages...");
 }
 
 void loop() {
-    // TODO: Add logic here
+    Serial.println("Sending ping to ESP32...");
+    
+    Wire.beginTransmission(ESP_1_ADDR);
+    Wire.write("test from arduino");
+    byte error = Wire.endTransmission();
 
-    delay(50);
+    if (error == 0) {
+        Serial.println("Transmission successful");
+    } else {
+        Serial.print("Transmission failed, error: ");
+        Serial.println(error);
+    }
+
+    delay(2000);
 }
