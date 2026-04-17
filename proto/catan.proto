@@ -2,73 +2,99 @@ syntax = "proto3";
 
 package catan;
 
-/* ============================= */
-/* ===== Top-Level Envelope ==== */
-/* ============================= */
+/* ================================================================= */
+/* Central Board → Player Station                                     */
+/*                                                                    */
+/* Sent by the Arduino Mega (I2C master) to each ESP32 player         */
+/* station (I2C slave).  Contains everything the player display needs. */
+/* ================================================================= */
 
-message Envelope {
-  uint32 protocol_version = 1;
-  DeviceRole source_role = 2;
-  uint32 source_id = 3; // 0 = central, 1-4 = players
-  MessageType type = 4;
-  bytes payload = 5;
+message BoardToPlayer {
+  MsgType  type           = 1;
+  GamePhase phase         = 2;
+  uint32   current_player = 3;   // 0-based index of whose turn it is
+  uint32   num_players    = 4;
+  uint32   your_player_id = 5;   // 0-based index assigned to this station
+
+  // Dice
+  uint32   die1           = 6;
+  uint32   die2           = 7;
+  uint32   dice_total     = 8;
+
+  // Number-reveal phase
+  uint32   reveal_number  = 9;
+
+  // Display strings (rendered on the OLED)
+  string   line1          = 10;
+  string   line2          = 11;
+  string   btn_left       = 12;
+  string   btn_center     = 13;
+  string   btn_right      = 14;
+
+  // Victory points per player slot (index 0-3)
+  uint32   vp0            = 15;
+  uint32   vp1            = 16;
+  uint32   vp2            = 17;
+  uint32   vp3            = 18;
+
+  // Resources for the receiving player
+  uint32   res_lumber     = 19;
+  uint32   res_wool       = 20;
+  uint32   res_grain      = 21;
+  uint32   res_brick      = 22;
+  uint32   res_ore        = 23;
+
+  // End-of-game
+  uint32   winner_id      = 24;
+
+  // Setup round tracking
+  uint32   setup_round    = 25;  // 1 or 2 during initial placement
+  bool     has_rolled     = 26;  // true if current player already rolled
 }
 
-/* ============================= */
-/* ===== Device Identity ======= */
-/* ============================= */
+/* ================================================================= */
+/* Player Station → Central Board                                     */
+/*                                                                    */
+/* Sent by an ESP32 player station when the Arduino master requests   */
+/* data via I2C read.  Contains pending button input.                 */
+/* ================================================================= */
 
-enum DeviceRole {
-  UNKNOWN = 0;
-  CENTRAL = 1;
-  PLAYER_STATION = 2;
+message PlayerToBoard {
+  MsgType  type           = 1;
+  ButtonId button         = 2;
 }
 
-/* ============================= */
-/* ===== Message Routing ======= */
-/* ============================= */
+/* ================================================================= */
+/* Enums                                                              */
+/* ================================================================= */
 
-enum MessageType {
-  NONE = 0;
+enum MsgType {
+  MSG_NONE          = 0;
 
-  // Central → Players
-  SYSTEM_STATE = 1;
-  HIGHLIGHT_TILES = 2;
-  TURN_UPDATE = 3;
-  DICE_RESULT = 4;
+  // Central → Player
+  MSG_GAME_STATE    = 1;   // Full state sync (sent every cycle)
+  MSG_DICE_RESULT   = 2;   // Dice result notification
+  MSG_PROMPT        = 3;   // Display prompt with button labels
 
   // Player → Central
-  PLAYER_CONNECTED = 10;
-  ADVANCE_SETUP = 11;
-  ROLL_DICE = 12;
+  MSG_BUTTON_EVENT  = 10;  // A button was pressed
+  MSG_PLAYER_READY  = 11;  // Station is alive (response to poll)
 }
 
-/* ============================= */
-/* ===== System State ========== */
-/* ============================= */
-
-message SystemState {
-  Phase phase = 1;
-  uint32 connected_players = 2;
+enum GamePhase {
+  PHASE_WAITING_FOR_PLAYERS = 0;
+  PHASE_BOARD_SETUP         = 1;
+  PHASE_NUMBER_REVEAL       = 2;
+  PHASE_INITIAL_PLACEMENT   = 3;   // Setup rounds: place settlements + roads
+  PHASE_PLAYING             = 4;   // Main game loop
+  PHASE_ROBBER              = 5;   // Must move robber (rolled 7)
+  PHASE_TRADE               = 6;   // Port/bank trading
+  PHASE_GAME_OVER           = 7;
 }
 
-enum Phase {
-  WAITING_FOR_PLAYERS = 0;
-  TILE_SETUP = 1;
-  GAME_RUNNING = 2;
-}
-
-/* ============================= */
-/* ===== Game Running ========== */
-/* ============================= */
-
-message TurnUpdate {
-  uint32 current_player_id = 1;
-}
-
-message DiceResult {
-  uint32 player_id = 1;
-  uint32 die_one = 2;
-  uint32 die_two = 3;
-  uint32 total = 4;
+enum ButtonId {
+  BTN_NONE   = 0;
+  BTN_LEFT   = 1;
+  BTN_CENTER = 2;
+  BTN_RIGHT  = 3;
 }

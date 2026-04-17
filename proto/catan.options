@@ -1,0 +1,7 @@
+## NanoPB options — fixed-size string fields for embedded targets
+
+catan.BoardToPlayer.line1        max_size:22
+catan.BoardToPlayer.line2        max_size:22
+catan.BoardToPlayer.btn_left     max_size:8
+catan.BoardToPlayer.btn_center   max_size:8
+catan.BoardToPlayer.btn_right    max_size:8
