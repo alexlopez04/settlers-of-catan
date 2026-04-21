@@ -1,14 +1,17 @@
 // =============================================================================
 // main.cpp — Settlers of Catan: ESP32-C6 Player Station
 //
-// I2C slave receiving protobuf BoardToPlayer messages from the central
-// Arduino Mega (master).  Displays game state on a bit-banged SSD1306 OLED.
-// Three buttons provide player input, sent back via I2C protobuf responses.
+// Receives BoardToPlayer protobuf messages from the central Arduino Mega via
+// I2C (slave mode).  Displays game state on a bit-banged SSD1306 OLED.
+// Three physical buttons and a BLE mobile interface provide player input.
 //
 // Hardware:
 //   - I2C slave (GPIO6=SDA, GPIO7=SCL) connected to Arduino Mega master
 //   - SSD1306 128×64 OLED (GPIO2=SDA, GPIO3=SCL) via bit-bang I2C
 //   - 3 buttons: Left=GPIO10, Center=GPIO11, Right=GPIO12 (active-low)
+//
+// I2C wire-frame format (both directions):
+//   [0xCA] [payload_len: uint8] [nanopb_payload: payload_len bytes]
 // =============================================================================
 
 #include "freertos/FreeRTOS.h"
@@ -26,12 +29,17 @@
 #include <pb_encode.h>
 #include <pb_decode.h>
 #include "proto/catan.pb.h"
+#include "bt_manager.h"
 
 static const char* TAG = "player";
 
 // ── Configuration — CHANGE PER DEVICE ───────────────────────────────────────
-#define MY_PLAYER_ID    0           // 0-3 for each player station
+#define MY_PLAYER_ID    1           // 0-3 for each player station
 #define MY_ADDRESS      (0x10 + MY_PLAYER_ID)
+
+// ── I2C wire-frame ───────────────────────────────────────────────────────────
+#define CATAN_WIRE_MAGIC   0xCA
+#define CATAN_FRAME_HEADER 2        // magic byte + length byte
 
 // ── I2C slave bus (to Arduino Mega) ─────────────────────────────────────────
 #define MEGA_SDA        6
@@ -62,11 +70,16 @@ static uint8_t fb[OLED_WIDTH * OLED_HEIGHT / 8];
 static catan_BoardToPlayer g_state;
 static SemaphoreHandle_t state_mutex;
 
-// Pending button press to send back to the board
-static volatile catan_ButtonId g_pending_button = catan_ButtonId_BTN_NONE;
+// Pending input to send back to the board.
+// Physical buttons set g_pending_button; BLE/semantic commands set
+// g_pending_action.  Both are cleared after encode_response() consumes them.
+static volatile catan_ButtonId   g_pending_button = catan_ButtonId_BTN_NONE;
+static volatile catan_PlayerAction g_pending_action = catan_PlayerAction_ACTION_NONE;
+static portMUX_TYPE g_pending_mux = portMUX_INITIALIZER_UNLOCKED;
 
-// Pre-encoded response buffer (protected by tx_mutex)
-static uint8_t  g_tx_buf[catan_PlayerToBoard_size + 4];
+// Pre-encoded response buffer with wire-frame header (protected by tx_mutex).
+// Layout: [0xCA][len][pb_bytes...]
+static uint8_t  g_tx_buf[CATAN_FRAME_HEADER + catan_PlayerToBoard_size];
 static size_t   g_tx_len = 0;
 
 // =====================================================================
@@ -355,26 +368,76 @@ static catan_ButtonId consume_button() {
 }
 
 // =====================================================================
-// Encode pending button response (pre-encode for fast I2C read response)
+// Map a semantic PlayerAction to a ButtonId based on the current
+// game state.  Used when a BLE client sends an ACTION_* command so
+// that the board receives the equivalent BTN_* it already understands.
+// =====================================================================
+
+static catan_ButtonId action_to_button(catan_PlayerAction action) {
+    switch (action) {
+        // Direct button equivalents
+        case catan_PlayerAction_ACTION_BTN_LEFT:    return catan_ButtonId_BTN_LEFT;
+        case catan_PlayerAction_ACTION_BTN_CENTER:  return catan_ButtonId_BTN_CENTER;
+        case catan_PlayerAction_ACTION_BTN_RIGHT:   return catan_ButtonId_BTN_RIGHT;
+
+        // Semantic → button mapping (matches the labels sent in BoardToPlayer)
+        case catan_PlayerAction_ACTION_ROLL_DICE:   return catan_ButtonId_BTN_LEFT;
+        case catan_PlayerAction_ACTION_END_TURN:    return catan_ButtonId_BTN_RIGHT;
+        case catan_PlayerAction_ACTION_TRADE:       return catan_ButtonId_BTN_LEFT;
+        case catan_PlayerAction_ACTION_SKIP_ROBBER: return catan_ButtonId_BTN_CENTER;
+        case catan_PlayerAction_ACTION_PLACE_DONE:  return catan_ButtonId_BTN_CENTER;
+        case catan_PlayerAction_ACTION_START_GAME:  return catan_ButtonId_BTN_LEFT;
+        case catan_PlayerAction_ACTION_NEXT_NUMBER: return catan_ButtonId_BTN_CENTER;
+
+        default: return catan_ButtonId_BTN_NONE;
+    }
+}
+
+// =====================================================================
+// Encode pending button / action response.
+// Pre-encodes the wire frame [0xCA][len][pb_bytes] into g_tx_buf so
+// the I2C transmit task can immediately satisfy a master read.
 // =====================================================================
 
 static void encode_response() {
     catan_PlayerToBoard msg = catan_PlayerToBoard_init_zero;
 
-    catan_ButtonId btn = g_pending_button;
+    // Atomically consume both pending inputs (button has priority).
+    taskENTER_CRITICAL(&g_pending_mux);
+    catan_ButtonId   btn    = g_pending_button;
+    catan_PlayerAction act  = g_pending_action;
     g_pending_button = catan_ButtonId_BTN_NONE;
+    g_pending_action = catan_PlayerAction_ACTION_NONE;
+    taskEXIT_CRITICAL(&g_pending_mux);
 
     if (btn != catan_ButtonId_BTN_NONE) {
-        msg.type = catan_MsgType_MSG_BUTTON_EVENT;
+        msg.type   = catan_MsgType_MSG_BUTTON_EVENT;
         msg.button = btn;
+    } else if (act != catan_PlayerAction_ACTION_NONE) {
+        msg.type   = catan_MsgType_MSG_ACTION;
+        msg.action = act;
+        msg.button = action_to_button(act);   // backward-compat for board
     } else {
         msg.type = catan_MsgType_MSG_PLAYER_READY;
     }
 
     xSemaphoreTake(tx_mutex, portMAX_DELAY);
-    pb_ostream_t stream = pb_ostream_from_buffer(g_tx_buf, sizeof(g_tx_buf));
-    pb_encode(&stream, catan_PlayerToBoard_fields, &msg);
-    g_tx_len = stream.bytes_written;
+    // Encode into g_tx_buf[2..] to leave room for the 2-byte frame header.
+    pb_ostream_t stream = pb_ostream_from_buffer(
+        g_tx_buf + CATAN_FRAME_HEADER,
+        sizeof(g_tx_buf) - CATAN_FRAME_HEADER);
+    if (pb_encode(&stream, catan_PlayerToBoard_fields, &msg)) {
+        g_tx_buf[0] = CATAN_WIRE_MAGIC;
+        g_tx_buf[1] = (uint8_t)stream.bytes_written;
+        // Zero-pad remainder so every write is exactly sizeof(g_tx_buf) bytes.
+        // This matches the fixed request_len used by the board master and prevents
+        // TX ring buffer de-alignment when multiple writes accumulate.
+        memset(g_tx_buf + CATAN_FRAME_HEADER + stream.bytes_written, 0,
+               sizeof(g_tx_buf) - CATAN_FRAME_HEADER - stream.bytes_written);
+        g_tx_len = sizeof(g_tx_buf);
+    } else {
+        g_tx_len = 0;
+    }
     xSemaphoreGive(tx_mutex);
 }
 
@@ -391,9 +454,19 @@ static bool on_receive(i2c_slave_dev_handle_t handle,
                        const i2c_slave_rx_done_event_data_t *event,
                        void *arg) {
     QueueHandle_t q = (QueueHandle_t)arg;
+    if (event->length < CATAN_FRAME_HEADER) return false;
+
+    const uint8_t *buf = event->buffer;
+    if (buf[0] != CATAN_WIRE_MAGIC) return false;   // discard bad frames
+
+    uint8_t payload_len = buf[1];
+    uint32_t total = CATAN_FRAME_HEADER + payload_len;
+    if (total > event->length || payload_len == 0) return false;
+
     RxMsg rm;
-    rm.len = event->length < I2C_BUF_SIZE ? event->length : I2C_BUF_SIZE;
-    memcpy(rm.data, event->buffer, rm.len);
+    rm.len = payload_len < I2C_BUF_SIZE ? payload_len : I2C_BUF_SIZE;
+    memcpy(rm.data, buf + CATAN_FRAME_HEADER, rm.len);
+
     BaseType_t woken = pdFALSE;
     xQueueSendFromISR(q, &rm, &woken);
     return woken == pdTRUE;
@@ -587,8 +660,17 @@ static void render_display(const catan_BoardToPlayer* s) {
 
 static void tx_task(void* arg) {
     while (true) {
-        // Always keep fresh response ready
-        encode_response();
+        // Only re-encode if there is new pending input; otherwise keep the
+        // previously encoded frame (e.g. a button event) in g_tx_buf so the
+        // board can read it.  The unconditional encode was overwriting button
+        // events with MSG_PLAYER_READY before the master had a chance to read.
+        taskENTER_CRITICAL(&g_pending_mux);
+        bool has_pending = (g_pending_button != catan_ButtonId_BTN_NONE ||
+                            g_pending_action != catan_PlayerAction_ACTION_NONE);
+        taskEXIT_CRITICAL(&g_pending_mux);
+        if (has_pending || g_tx_len == 0) {
+            encode_response();
+        }
 
         xSemaphoreTake(tx_mutex, portMAX_DELAY);
         uint8_t buf[catan_PlayerToBoard_size + 4];
@@ -611,14 +693,34 @@ static void tx_task(void* arg) {
 }
 
 // =====================================================================
+// BLE command callback — invoked by bt_manager when a mobile client
+// writes to the Command characteristic.  Maps the incoming PlayerToBoard
+// message into the pending input variables exactly as physical buttons do.
+// =====================================================================
+
+static void on_ble_command(const catan_PlayerToBoard *cmd) {
+    if (!cmd) return;
+
+    // Prefer the semantic action field when present.
+    if (cmd->action != catan_PlayerAction_ACTION_NONE) {
+        g_pending_action = cmd->action;
+        ESP_LOGI(TAG, "BLE action=%d", cmd->action);
+    } else if (cmd->button != catan_ButtonId_BTN_NONE) {
+        g_pending_button = cmd->button;
+        ESP_LOGI(TAG, "BLE button=%d", cmd->button);
+    }
+    encode_response();  // pre-encode so the board can read it immediately
+}
+
+// =====================================================================
 // Main
 // =====================================================================
 
 extern "C" void app_main() {
     ESP_LOGI(TAG, "=== Catan Player Station %d ===", MY_PLAYER_ID + 1);
 
-    rx_queue = xQueueCreate(4, sizeof(RxMsg));
-    tx_mutex = xSemaphoreCreateMutex();
+    rx_queue    = xQueueCreate(4, sizeof(RxMsg));
+    tx_mutex    = xSemaphoreCreateMutex();
     state_mutex = xSemaphoreCreateMutex();
 
     g_state = catan_BoardToPlayer_init_zero;
@@ -627,6 +729,9 @@ extern "C" void app_main() {
     oled_init();
     buttons_init();
     mega_slave_init();
+
+    // Initialise BLE — must come after NVS is available (handled internally).
+    bt_manager_init(MY_PLAYER_ID, on_ble_command);
 
     // Show startup screen
     oled_clear();
@@ -658,19 +763,20 @@ extern "C" void app_main() {
                 memcpy(&g_state, &msg, sizeof(g_state));
                 xSemaphoreGive(state_mutex);
 
-                // Re-render display with new state
+                // Re-render display and push state to BLE subscribers.
                 render_display(&msg);
+                bt_manager_notify_state(&msg);
             } else {
                 ESP_LOGW(TAG, "Proto decode fail");
             }
         }
 
-        // Poll buttons
+        // Poll physical buttons
         buttons_poll();
         catan_ButtonId btn = consume_button();
         if (btn != catan_ButtonId_BTN_NONE) {
             g_pending_button = btn;
-            encode_response();  // Immediately prepare response
+            encode_response();
             ESP_LOGI(TAG, "Button: %d", btn);
         }
 

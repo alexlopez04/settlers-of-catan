@@ -17,8 +17,9 @@ typedef enum _catan_MsgType {
     catan_MsgType_MSG_DICE_RESULT = 2, /* Dice result notification */
     catan_MsgType_MSG_PROMPT = 3, /* Display prompt with button labels */
     /* Player → Central */
-    catan_MsgType_MSG_BUTTON_EVENT = 10, /* A button was pressed */
-    catan_MsgType_MSG_PLAYER_READY = 11 /* Station is alive (response to poll) */
+    catan_MsgType_MSG_BUTTON_EVENT = 10, /* A raw button was pressed */
+    catan_MsgType_MSG_PLAYER_READY = 11, /* Station is alive (response to poll) */
+    catan_MsgType_MSG_ACTION = 12 /* A semantic player action was triggered */
 } catan_MsgType;
 
 typedef enum _catan_GamePhase {
@@ -39,6 +40,42 @@ typedef enum _catan_ButtonId {
     catan_ButtonId_BTN_RIGHT = 3
 } catan_ButtonId;
 
+/* ── PlayerAction ──────────────────────────────────────────────────────────
+
+ Semantic actions used by BLE clients (mobile apps).  The player station
+ maps each action to the equivalent ButtonId before forwarding to the board
+ so the board firmware requires no changes.
+
+ Button-equivalent actions (ACTION_BTN_*) are a direct mapping and may be
+ used when the app wants pixel-perfect button parity.
+
+ Semantic actions describe intent and are resolved against the current
+ GamePhase by the player station:
+
+   ACTION_ROLL_DICE    → BTN_LEFT   (PHASE_PLAYING, before roll)
+   ACTION_END_TURN     → BTN_RIGHT  (PHASE_PLAYING, after roll)
+   ACTION_TRADE        → BTN_LEFT   (PHASE_TRADE)
+   ACTION_SKIP_ROBBER  → BTN_CENTER (PHASE_ROBBER)
+   ACTION_PLACE_DONE   → BTN_CENTER (PHASE_INITIAL_PLACEMENT)
+   ACTION_START_GAME   → BTN_LEFT   (PHASE_WAITING_FOR_PLAYERS)
+   ACTION_NEXT_NUMBER  → BTN_CENTER (PHASE_NUMBER_REVEAL)
+ ──────────────────────────────────────────────────────────────────────── */
+typedef enum _catan_PlayerAction {
+    catan_PlayerAction_ACTION_NONE = 0,
+    /* Direct button equivalents */
+    catan_PlayerAction_ACTION_BTN_LEFT = 1,
+    catan_PlayerAction_ACTION_BTN_CENTER = 2,
+    catan_PlayerAction_ACTION_BTN_RIGHT = 3,
+    /* Semantic actions (resolved by the player station) */
+    catan_PlayerAction_ACTION_ROLL_DICE = 4, /* Roll the dice (your turn, not yet rolled) */
+    catan_PlayerAction_ACTION_END_TURN = 5, /* End your turn */
+    catan_PlayerAction_ACTION_TRADE = 6, /* Enter trade phase / confirm trade */
+    catan_PlayerAction_ACTION_SKIP_ROBBER = 7, /* Skip/pass robber placement */
+    catan_PlayerAction_ACTION_PLACE_DONE = 8, /* Confirm piece placement (initial placement) */
+    catan_PlayerAction_ACTION_START_GAME = 9, /* Ready / start game (waiting phase) */
+    catan_PlayerAction_ACTION_NEXT_NUMBER = 10 /* Advance number reveal */
+} catan_PlayerAction;
+
 /* Struct definitions */
 typedef struct _catan_BoardToPlayer {
     catan_MsgType type;
@@ -52,18 +89,18 @@ typedef struct _catan_BoardToPlayer {
     uint32_t dice_total;
     /* Number-reveal phase */
     uint32_t reveal_number;
-    /* Display strings (rendered on the OLED) */
+    /* Display strings (rendered on the OLED / forwarded to mobile) */
     char line1[22];
     char line2[22];
-    char btn_left[8];
-    char btn_center[8];
-    char btn_right[8];
+    char btn_left[8]; /* label for left action */
+    char btn_center[8]; /* label for centre action */
+    char btn_right[8]; /* label for right action */
     /* Victory points per player slot (index 0-3) */
     uint32_t vp0;
     uint32_t vp1;
     uint32_t vp2;
     uint32_t vp3;
-    /* Resources for the receiving player */
+    /* Resources for the receiving player only */
     uint32_t res_lumber;
     uint32_t res_wool;
     uint32_t res_grain;
@@ -74,11 +111,15 @@ typedef struct _catan_BoardToPlayer {
     /* Setup round tracking */
     uint32_t setup_round; /* 1 or 2 during initial placement */
     bool has_rolled; /* true if current player already rolled */
+    /* Schema version — always set to CATAN_PROTO_VERSION (currently 2).
+ Receivers SHOULD discard messages with an unrecognised version. */
+    uint32_t proto_version;
 } catan_BoardToPlayer;
 
 typedef struct _catan_PlayerToBoard {
     catan_MsgType type;
-    catan_ButtonId button;
+    catan_ButtonId button; /* raw button press (BTN_LEFT / CENTER / RIGHT) */
+    catan_PlayerAction action; /* semantic action (preferred for BLE clients) */
 } catan_PlayerToBoard;
 
 
@@ -88,8 +129,8 @@ extern "C" {
 
 /* Helper constants for enums */
 #define _catan_MsgType_MIN catan_MsgType_MSG_NONE
-#define _catan_MsgType_MAX catan_MsgType_MSG_PLAYER_READY
-#define _catan_MsgType_ARRAYSIZE ((catan_MsgType)(catan_MsgType_MSG_PLAYER_READY+1))
+#define _catan_MsgType_MAX catan_MsgType_MSG_ACTION
+#define _catan_MsgType_ARRAYSIZE ((catan_MsgType)(catan_MsgType_MSG_ACTION+1))
 
 #define _catan_GamePhase_MIN catan_GamePhase_PHASE_WAITING_FOR_PLAYERS
 #define _catan_GamePhase_MAX catan_GamePhase_PHASE_GAME_OVER
@@ -99,18 +140,23 @@ extern "C" {
 #define _catan_ButtonId_MAX catan_ButtonId_BTN_RIGHT
 #define _catan_ButtonId_ARRAYSIZE ((catan_ButtonId)(catan_ButtonId_BTN_RIGHT+1))
 
+#define _catan_PlayerAction_MIN catan_PlayerAction_ACTION_NONE
+#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_NEXT_NUMBER
+#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_NEXT_NUMBER+1))
+
 #define catan_BoardToPlayer_type_ENUMTYPE catan_MsgType
 #define catan_BoardToPlayer_phase_ENUMTYPE catan_GamePhase
 
 #define catan_PlayerToBoard_type_ENUMTYPE catan_MsgType
 #define catan_PlayerToBoard_button_ENUMTYPE catan_ButtonId
+#define catan_PlayerToBoard_action_ENUMTYPE catan_PlayerAction
 
 
 /* Initializer values for message structs */
-#define catan_BoardToPlayer_init_default         {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerToBoard_init_default         {_catan_MsgType_MIN, _catan_ButtonId_MIN}
-#define catan_BoardToPlayer_init_zero            {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerToBoard_init_zero            {_catan_MsgType_MIN, _catan_ButtonId_MIN}
+#define catan_BoardToPlayer_init_default         {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define catan_PlayerToBoard_init_default         {_catan_MsgType_MIN, _catan_ButtonId_MIN, _catan_PlayerAction_MIN}
+#define catan_BoardToPlayer_init_zero            {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define catan_PlayerToBoard_init_zero            {_catan_MsgType_MIN, _catan_ButtonId_MIN, _catan_PlayerAction_MIN}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define catan_BoardToPlayer_type_tag             1
@@ -139,8 +185,10 @@ extern "C" {
 #define catan_BoardToPlayer_winner_id_tag        24
 #define catan_BoardToPlayer_setup_round_tag      25
 #define catan_BoardToPlayer_has_rolled_tag       26
+#define catan_BoardToPlayer_proto_version_tag    30
 #define catan_PlayerToBoard_type_tag             1
 #define catan_PlayerToBoard_button_tag           2
+#define catan_PlayerToBoard_action_tag           3
 
 /* Struct field encoding specification for nanopb */
 #define catan_BoardToPlayer_FIELDLIST(X, a) \
@@ -169,13 +217,15 @@ X(a, STATIC,   SINGULAR, UINT32,   res_brick,        22) \
 X(a, STATIC,   SINGULAR, UINT32,   res_ore,          23) \
 X(a, STATIC,   SINGULAR, UINT32,   winner_id,        24) \
 X(a, STATIC,   SINGULAR, UINT32,   setup_round,      25) \
-X(a, STATIC,   SINGULAR, BOOL,     has_rolled,       26)
+X(a, STATIC,   SINGULAR, BOOL,     has_rolled,       26) \
+X(a, STATIC,   SINGULAR, UINT32,   proto_version,    30)
 #define catan_BoardToPlayer_CALLBACK NULL
 #define catan_BoardToPlayer_DEFAULT NULL
 
 #define catan_PlayerToBoard_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UENUM,    type,              1) \
-X(a, STATIC,   SINGULAR, UENUM,    button,            2)
+X(a, STATIC,   SINGULAR, UENUM,    button,            2) \
+X(a, STATIC,   SINGULAR, UENUM,    action,            3)
 #define catan_PlayerToBoard_CALLBACK NULL
 #define catan_PlayerToBoard_DEFAULT NULL
 
@@ -188,8 +238,8 @@ extern const pb_msgdesc_t catan_PlayerToBoard_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardToPlayer_size
-#define catan_BoardToPlayer_size                 198
-#define catan_PlayerToBoard_size                 4
+#define catan_BoardToPlayer_size                 205
+#define catan_PlayerToBoard_size                 6
 
 #ifdef __cplusplus
 } /* extern "C" */

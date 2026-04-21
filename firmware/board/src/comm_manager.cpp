@@ -54,16 +54,23 @@ uint8_t detectPlayers() {
 bool sendToPlayer(uint8_t player_id, const catan_BoardToPlayer& msg) {
     if (player_id >= MAX_PLAYERS) return false;
 
-    pb_ostream_t stream = pb_ostream_from_buffer(tx_buf, sizeof(tx_buf));
+    // Encode protobuf into tx_buf[2..] leaving room for the 2-byte frame header.
+    pb_ostream_t stream = pb_ostream_from_buffer(tx_buf + CATAN_FRAME_HEADER,
+                                                 sizeof(tx_buf) - CATAN_FRAME_HEADER);
     if (!pb_encode(&stream, catan_BoardToPlayer_fields, &msg)) {
         Serial.print(F("[COMM] Encode fail: "));
         Serial.println(PB_GET_ERROR(&stream));
         return false;
     }
 
+    // Prepend wire-frame header: [0xCA][payload_len]
+    tx_buf[0] = CATAN_WIRE_MAGIC;
+    tx_buf[1] = (uint8_t)stream.bytes_written;
+    const size_t total = CATAN_FRAME_HEADER + stream.bytes_written;
+
     uint8_t addr = PLAYER_I2C_BASE + player_id;
     Wire.beginTransmission(addr);
-    Wire.write(tx_buf, stream.bytes_written);
+    Wire.write(tx_buf, total);
     uint8_t err = Wire.endTransmission();
 
     return (err == 0);
@@ -72,18 +79,29 @@ bool sendToPlayer(uint8_t player_id, const catan_BoardToPlayer& msg) {
 bool readFromPlayer(uint8_t player_id, catan_PlayerToBoard& msg) {
     if (player_id >= MAX_PLAYERS) return false;
 
+    // Request enough bytes for the frame header plus the max encoded payload.
+    const uint8_t request_len = CATAN_FRAME_HEADER + (uint8_t)catan_PlayerToBoard_size;
     uint8_t addr = PLAYER_I2C_BASE + player_id;
-    uint8_t len = Wire.requestFrom(addr, (uint8_t)catan_PlayerToBoard_size);
-    if (len == 0) return false;
+    uint8_t len = Wire.requestFrom(addr, request_len);
+    if (len < CATAN_FRAME_HEADER) return false;
 
     uint8_t count = 0;
     while (Wire.available() && count < sizeof(rx_buf)) {
         rx_buf[count++] = Wire.read();
     }
-    if (count == 0) return false;
+
+    // Validate frame header.
+    if (count < CATAN_FRAME_HEADER) return false;
+    if (rx_buf[0] != CATAN_WIRE_MAGIC) {
+        Serial.print(F("[COMM] Bad magic from P"));
+        Serial.println(player_id);
+        return false;
+    }
+    uint8_t payload_len = rx_buf[1];
+    if (payload_len == 0 || (CATAN_FRAME_HEADER + payload_len) > count) return false;
 
     msg = catan_PlayerToBoard_init_zero;
-    pb_istream_t stream = pb_istream_from_buffer(rx_buf, count);
+    pb_istream_t stream = pb_istream_from_buffer(rx_buf + CATAN_FRAME_HEADER, payload_len);
     if (!pb_decode(&stream, catan_PlayerToBoard_fields, &msg)) {
         return false;
     }
@@ -105,6 +123,7 @@ void syncStateToAll(uint8_t connected_mask) {
         if (!(connected_mask & (1 << i))) continue;
 
         catan_BoardToPlayer msg = catan_BoardToPlayer_init_zero;
+        msg.proto_version  = CATAN_PROTO_VERSION;
         msg.type           = catan_MsgType_MSG_GAME_STATE;
         msg.phase          = phaseToProto(gp);
         msg.current_player = game::currentPlayer();
