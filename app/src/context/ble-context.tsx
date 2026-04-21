@@ -8,8 +8,21 @@ import React, {
 } from 'react';
 import { BleManager, Device, State, Subscription } from 'react-native-ble-plx';
 
-import { CATAN_SERVICE_UUID, COMMAND_UUID, GAME_STATE_UUID, SCAN_TIMEOUT_MS } from '@/constants/ble';
-import { BoardToPlayer, decodeBoardToPlayer, encodeAction, PlayerAction } from '@/services/proto';
+import {
+  CATAN_SERVICE_UUID,
+  COMMAND_UUID,
+  GAME_STATE_UUID,
+  SCAN_TIMEOUT_MS,
+} from '@/constants/ble';
+import {
+  BoardState,
+  PlayerAction,
+  PlayerInput,
+  decodeBoardStateFrame,
+  encodeAction,
+  encodePlayerInput,
+  encodeReport,
+} from '@/services/proto';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -21,25 +34,43 @@ export interface ScannedDevice {
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnecting';
 
+export interface ResourceCounts {
+  lumber: number;
+  wool: number;
+  grain: number;
+  brick: number;
+  ore: number;
+}
+
 interface BleContextValue {
   bleState: State;
   scanning: boolean;
   devices: ScannedDevice[];
   connectionState: ConnectionState;
   connectedName: string | null;
-  gameState: BoardToPlayer | null;
+  /** Player index (0-based) derived from the connected device name, or null. */
+  playerId: number | null;
+  gameState: BoardState | null;
   startScan: () => void;
   stopScan: () => void;
   connect: (deviceId: string) => Promise<void>;
   disconnect: () => Promise<void>;
   sendAction: (action: PlayerAction) => Promise<void>;
+  sendInput: (input: Partial<PlayerInput> & { action: PlayerAction }) => Promise<void>;
+  sendReport: (vp: number, resources: ResourceCounts) => Promise<void>;
 }
-
-// ── Context ───────────────────────────────────────────────────────────────
 
 const BleContext = createContext<BleContextValue | null>(null);
 
-// ── Provider ──────────────────────────────────────────────────────────────
+/** Parses a device name like "Catan-P3" → player index 2 (0-based). Null if unknown. */
+function parsePlayerIdFromName(name: string | null | undefined): number | null {
+  if (!name) return null;
+  const m = /^Catan-P(\d+)$/.exec(name);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n < 1 || n > 4) return null;
+  return n - 1;
+}
 
 export function BleProvider({ children }: { children: React.ReactNode }) {
   const managerRef = useRef<BleManager | null>(null);
@@ -53,17 +84,13 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [connectedName, setConnectedName] = useState<string | null>(null);
-  const [gameState, setGameState] = useState<BoardToPlayer | null>(null);
+  const [playerId, setPlayerId] = useState<number | null>(null);
+  const [gameState, setGameState] = useState<BoardState | null>(null);
 
-  // Create BleManager once on mount
   useEffect(() => {
     const mgr = new BleManager();
     managerRef.current = mgr;
-
-    const stateSub = mgr.onStateChange(state => {
-      setBleState(state);
-    }, true /* emit current state immediately */);
-
+    const stateSub = mgr.onStateChange(s => setBleState(s), true);
     return () => {
       stateSub.remove();
       if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
@@ -98,7 +125,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
           setScanning(false);
           return;
         }
-        if (device?.name?.startsWith('Catan-')) {
+        if (device?.name && /^Catan-P\d+$/.test(device.name)) {
           setDevices(prev => {
             if (prev.some(d => d.id === device.id)) return prev;
             return [...prev, { id: device.id, name: device.name!, rssi: device.rssi }];
@@ -126,39 +153,38 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
         deviceRef.current = device;
         setConnectedName(device.name ?? deviceId);
+        setPlayerId(parsePlayerIdFromName(device.name));
 
-        // Handle unexpected disconnect
         disconnectSubRef.current = device.onDisconnected(() => {
           notifSubRef.current?.remove();
           notifSubRef.current = null;
           disconnectSubRef.current = null;
           deviceRef.current = null;
           setConnectedName(null);
+          setPlayerId(null);
           setGameState(null);
           setConnectionState('idle');
         });
 
-        // Subscribe to GameState notifications
         notifSubRef.current = device.monitorCharacteristicForService(
           CATAN_SERVICE_UUID,
           GAME_STATE_UUID,
           (err, characteristic) => {
             if (err || !characteristic?.value) return;
-            try {
-              setGameState(decodeBoardToPlayer(characteristic.value));
-            } catch {
-              // Ignore malformed frames
-            }
+            const decoded = decodeBoardStateFrame(characteristic.value);
+            if (decoded) setGameState(decoded);
           },
         );
 
-        // Read current state immediately so the screen isn't blank
         try {
           const char = await device.readCharacteristicForService(
             CATAN_SERVICE_UUID,
             GAME_STATE_UUID,
           );
-          if (char.value) setGameState(decodeBoardToPlayer(char.value));
+          if (char.value) {
+            const decoded = decodeBoardStateFrame(char.value);
+            if (decoded) setGameState(decoded);
+          }
         } catch {
           // Non-critical — notifications will populate state soon
         }
@@ -191,22 +217,58 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
     deviceRef.current = null;
     setConnectedName(null);
+    setPlayerId(null);
     setGameState(null);
     setConnectionState('idle');
   }, []);
 
-  // ── Send action ──────────────────────────────────────────────────────────
+  // ── Send helpers ─────────────────────────────────────────────────────────
 
-  const sendAction = useCallback(async (action: PlayerAction) => {
+  const writePayload = useCallback(async (payload: string) => {
     const device = deviceRef.current;
     if (!device) return;
-    const payload = encodeAction(action);
     await device.writeCharacteristicWithResponseForService(
       CATAN_SERVICE_UUID,
       COMMAND_UUID,
       payload,
     );
   }, []);
+
+  const sendAction = useCallback(
+    async (action: PlayerAction) => {
+      const id = playerId ?? 0;
+      await writePayload(encodeAction(id, action));
+    },
+    [playerId, writePayload],
+  );
+
+  const sendInput = useCallback(
+    async (input: Partial<PlayerInput> & { action: PlayerAction }) => {
+      const id = input.playerId ?? playerId ?? 0;
+      await writePayload(
+        encodePlayerInput({
+          protoVersion: input.protoVersion ?? 3,
+          playerId: id,
+          action: input.action,
+          vp: input.vp,
+          resLumber: input.resLumber,
+          resWool: input.resWool,
+          resGrain: input.resGrain,
+          resBrick: input.resBrick,
+          resOre: input.resOre,
+        }),
+      );
+    },
+    [playerId, writePayload],
+  );
+
+  const sendReport = useCallback(
+    async (vp: number, resources: ResourceCounts) => {
+      const id = playerId ?? 0;
+      await writePayload(encodeReport(id, vp, resources));
+    },
+    [playerId, writePayload],
+  );
 
   return (
     <BleContext.Provider
@@ -216,19 +278,20 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         devices,
         connectionState,
         connectedName,
+        playerId,
         gameState,
         startScan,
         stopScan,
         connect,
         disconnect,
         sendAction,
+        sendInput,
+        sendReport,
       }}>
       {children}
     </BleContext.Provider>
   );
 }
-
-// ── Hook ──────────────────────────────────────────────────────────────────
 
 export function useBle() {
   const ctx = useContext(BleContext);

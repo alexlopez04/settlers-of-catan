@@ -1,68 +1,89 @@
-// ── Enums (mirrors catan.proto) ───────────────────────────────────────────
+// =============================================================================
+// proto.ts — Catan v3 wire protocol: BoardState / PlayerInput encode/decode.
+//
+// Wire frame on every hop (including BLE):
+//
+//   [ 0xCA magic ] [ len : uint8 ] [ nanopb payload : len bytes ]
+//
+// BLE characteristic values from react-native-ble-plx are base64-encoded.
+// =============================================================================
 
-export enum MsgType {
-  MSG_NONE = 0,
-  MSG_GAME_STATE = 1,
-  MSG_DICE_RESULT = 2,
-  MSG_PROMPT = 3,
-  MSG_BUTTON_EVENT = 10,
-  MSG_PLAYER_READY = 11,
-  MSG_ACTION = 12,
-}
+// ── Wire constants (must match firmware/{*}/src/catan_wire.h) ────────────
+export const CATAN_WIRE_MAGIC = 0xca;
+export const CATAN_FRAME_HEADER = 2;
+export const CATAN_PROTO_VERSION = 3;
+
+// ── Enums (mirror catan.proto) ────────────────────────────────────────────
 
 export enum GamePhase {
-  PHASE_WAITING_FOR_PLAYERS = 0,
-  PHASE_BOARD_SETUP = 1,
-  PHASE_NUMBER_REVEAL = 2,
-  PHASE_INITIAL_PLACEMENT = 3,
-  PHASE_PLAYING = 4,
-  PHASE_ROBBER = 5,
-  PHASE_TRADE = 6,
-  PHASE_GAME_OVER = 7,
+  LOBBY = 0,
+  BOARD_SETUP = 1,
+  NUMBER_REVEAL = 2,
+  INITIAL_PLACEMENT = 3,
+  PLAYING = 4,
+  ROBBER = 5,
+  GAME_OVER = 6,
 }
 
 export enum PlayerAction {
-  ACTION_NONE = 0,
-  ACTION_BTN_LEFT = 1,
-  ACTION_BTN_CENTER = 2,
-  ACTION_BTN_RIGHT = 3,
-  ACTION_ROLL_DICE = 4,
-  ACTION_END_TURN = 5,
-  ACTION_TRADE = 6,
-  ACTION_SKIP_ROBBER = 7,
-  ACTION_PLACE_DONE = 8,
-  ACTION_START_GAME = 9,
-  ACTION_NEXT_NUMBER = 10,
+  NONE = 0,
+  READY = 1,
+  START_GAME = 2,
+  NEXT_NUMBER = 3,
+  PLACE_DONE = 4,
+  ROLL_DICE = 5,
+  END_TURN = 6,
+  SKIP_ROBBER = 7,
+  REPORT = 8,
+}
+
+export enum Biome {
+  DESERT = 0,
+  FOREST = 1,
+  PASTURE = 2,
+  FIELD = 3,
+  HILL = 4,
+  MOUNTAIN = 5,
 }
 
 // ── Message types ─────────────────────────────────────────────────────────
 
-export interface BoardToPlayer {
+export interface Tile {
+  biome: Biome;
+  number: number;
+}
+
+export interface BoardState {
   protoVersion: number;
-  type: MsgType;
   phase: GamePhase;
-  currentPlayer: number;
   numPlayers: number;
-  yourPlayerId: number;
-  die1: number;
-  die2: number;
-  diceTotal: number;
-  revealNumber: number;
-  line1: string;
-  line2: string;
-  btnLeft: string;
-  btnCenter: string;
-  btnRight: string;
-  vp: [number, number, number, number];
-  resLumber: number;
-  resWool: number;
-  resGrain: number;
-  resBrick: number;
-  resOre: number;
-  winnerId: number;
+  currentPlayer: number;
   setupRound: number;
   hasRolled: boolean;
+  die1: number;
+  die2: number;
+  revealNumber: number;
+  winnerId: number;
+  robberTile: number;
+  connectedMask: number;
+  tiles: Tile[];
+  vp: number[];
 }
+
+export interface PlayerInput {
+  protoVersion: number;
+  playerId: number;
+  action: PlayerAction;
+  vp?: number;
+  resLumber?: number;
+  resWool?: number;
+  resGrain?: number;
+  resBrick?: number;
+  resOre?: number;
+}
+
+export const NO_WINNER = 0xff;
+export const NO_TILE = 0xff;
 
 // ── Proto3 varint helpers ─────────────────────────────────────────────────
 
@@ -78,28 +99,19 @@ function readVarint(buf: Uint8Array, offset: number): [number, number] {
   return [result >>> 0, offset];
 }
 
-function writeVarint(value: number): number[] {
-  const bytes: number[] = [];
+function writeVarint(value: number, out: number[]): void {
   let v = value >>> 0;
   while (v > 0x7f) {
-    bytes.push((v & 0x7f) | 0x80);
+    out.push((v & 0x7f) | 0x80);
     v >>>= 7;
   }
-  bytes.push(v & 0x7f);
-  return bytes;
+  out.push(v & 0x7f);
 }
 
-/** Encodes a varint field only when value is non-zero (proto3 default omission). */
-function encodeVarintField(fieldNum: number, value: number): number[] {
-  if (!value) return [];
-  return [...writeVarint((fieldNum << 3) | 0), ...writeVarint(value)];
-}
-
-/** Decode plain ASCII / Latin-1 bytes to string (BLE strings are ASCII, max 22 chars). */
-function decodeBytes(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map(b => String.fromCharCode(b))
-    .join('');
+function encodeVarintField(fieldNum: number, value: number, out: number[]): void {
+  if (!value) return; // proto3 default — omit zero values
+  writeVarint((fieldNum << 3) | 0, out);
+  writeVarint(value, out);
 }
 
 // ── Base64 ↔ Uint8Array ───────────────────────────────────────────────────
@@ -111,58 +123,120 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
+function bytesToBase64(bytes: Uint8Array | number[]): string {
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
 
-// ── Encode PlayerToBoard ──────────────────────────────────────────────────
+// ── Frame helpers ─────────────────────────────────────────────────────────
 
-/** Returns a base64-encoded PlayerToBoard{type=MSG_ACTION, action} message. */
-export function encodeAction(action: PlayerAction): string {
-  const bytes = new Uint8Array([
-    ...encodeVarintField(1, MsgType.MSG_ACTION),
-    ...encodeVarintField(3, action),
-  ]);
-  return bytesToBase64(bytes);
+/** Wraps a nanopb payload in the Catan wire frame, returning base64. */
+function frameBase64(payload: number[]): string {
+  if (payload.length > 0xff) throw new Error(`payload too big: ${payload.length}`);
+  const framed = [CATAN_WIRE_MAGIC, payload.length & 0xff, ...payload];
+  return bytesToBase64(framed);
 }
 
-// ── Decode BoardToPlayer ──────────────────────────────────────────────────
+/** Strips the Catan wire frame, returning the nanopb payload or null. */
+function unframe(bytes: Uint8Array): Uint8Array | null {
+  if (bytes.length < CATAN_FRAME_HEADER) return null;
+  if (bytes[0] !== CATAN_WIRE_MAGIC) return null;
+  const len = bytes[1];
+  if (len === 0 || CATAN_FRAME_HEADER + len > bytes.length) return null;
+  return bytes.slice(CATAN_FRAME_HEADER, CATAN_FRAME_HEADER + len);
+}
 
-const NO_WINNER = 0xff;
+// ── Encode PlayerInput ────────────────────────────────────────────────────
 
-/** Parses a base64 NanoPB-encoded BoardToPlayer message. */
-export function decodeBoardToPlayer(base64: string): BoardToPlayer {
-  const buf = base64ToBytes(base64);
+/** Encodes and frames a PlayerInput message, returning a base64 string
+ *  ready for writeCharacteristicWithResponseForService. */
+export function encodePlayerInput(input: PlayerInput): string {
+  const out: number[] = [];
+  encodeVarintField(1, input.protoVersion || CATAN_PROTO_VERSION, out);
+  encodeVarintField(2, input.playerId | 0, out);
+  encodeVarintField(3, input.action | 0, out);
+  if (input.vp)         encodeVarintField(10, input.vp | 0, out);
+  if (input.resLumber)  encodeVarintField(11, input.resLumber | 0, out);
+  if (input.resWool)    encodeVarintField(12, input.resWool | 0, out);
+  if (input.resGrain)   encodeVarintField(13, input.resGrain | 0, out);
+  if (input.resBrick)   encodeVarintField(14, input.resBrick | 0, out);
+  if (input.resOre)     encodeVarintField(15, input.resOre | 0, out);
+  return frameBase64(out);
+}
 
-  const state: BoardToPlayer = {
+/** Convenience helper for simple action-only inputs. */
+export function encodeAction(playerId: number, action: PlayerAction): string {
+  return encodePlayerInput({
+    protoVersion: CATAN_PROTO_VERSION,
+    playerId,
+    action,
+  });
+}
+
+/** Self-report current VP + resource counts. */
+export function encodeReport(
+  playerId: number,
+  vp: number,
+  resources: { lumber: number; wool: number; grain: number; brick: number; ore: number },
+): string {
+  return encodePlayerInput({
+    protoVersion: CATAN_PROTO_VERSION,
+    playerId,
+    action: PlayerAction.REPORT,
+    vp,
+    resLumber: resources.lumber,
+    resWool: resources.wool,
+    resGrain: resources.grain,
+    resBrick: resources.brick,
+    resOre: resources.ore,
+  });
+}
+
+// ── Decode BoardState ─────────────────────────────────────────────────────
+
+function emptyBoardState(): BoardState {
+  return {
     protoVersion: 0,
-    type: MsgType.MSG_NONE,
-    phase: GamePhase.PHASE_WAITING_FOR_PLAYERS,
-    currentPlayer: 0,
+    phase: GamePhase.LOBBY,
     numPlayers: 0,
-    yourPlayerId: 0,
-    die1: 0,
-    die2: 0,
-    diceTotal: 0,
-    revealNumber: 0,
-    line1: '',
-    line2: '',
-    btnLeft: '',
-    btnCenter: '',
-    btnRight: '',
-    vp: [0, 0, 0, 0],
-    resLumber: 0,
-    resWool: 0,
-    resGrain: 0,
-    resBrick: 0,
-    resOre: 0,
-    winnerId: NO_WINNER,
+    currentPlayer: 0,
     setupRound: 0,
     hasRolled: false,
+    die1: 0,
+    die2: 0,
+    revealNumber: 0,
+    winnerId: NO_WINNER,
+    robberTile: NO_TILE,
+    connectedMask: 0,
+    tiles: [],
+    vp: [0, 0, 0, 0],
   };
+}
 
+function unpackTiles(packed: Uint8Array): Tile[] {
+  const tiles: Tile[] = [];
+  for (let i = 0; i < packed.length; i++) {
+    const byte = packed[i];
+    tiles.push({
+      biome: ((byte >> 4) & 0x0f) as Biome,
+      number: byte & 0x0f,
+    });
+  }
+  return tiles;
+}
+
+/** Parses a base64 Catan frame (wire header + BoardState) into a state object. */
+export function decodeBoardStateFrame(base64: string): BoardState | null {
+  const bytes = base64ToBytes(base64);
+  const payload = unframe(bytes);
+  if (!payload) return null;
+  return decodeBoardStatePayload(payload);
+}
+
+/** Parses a raw BoardState nanopb payload (no frame). */
+export function decodeBoardStatePayload(buf: Uint8Array): BoardState {
+  const state = emptyBoardState();
   let offset = 0;
   while (offset < buf.length) {
     let tag: number;
@@ -174,48 +248,46 @@ export function decodeBoardToPlayer(base64: string): BoardToPlayer {
       let v: number;
       [v, offset] = readVarint(buf, offset);
       switch (fieldNum) {
-        case 30: state.protoVersion = v; break;
-        case 1:  state.type = v; break;
-        case 2:  state.phase = v; break;
-        case 3:  state.currentPlayer = v; break;
-        case 4:  state.numPlayers = v; break;
-        case 5:  state.yourPlayerId = v; break;
-        case 6:  state.die1 = v; break;
-        case 7:  state.die2 = v; break;
-        case 8:  state.diceTotal = v; break;
+        case 1:  state.protoVersion = v; break;
+        case 2:  state.phase = v as GamePhase; break;
+        case 3:  state.numPlayers = v; break;
+        case 4:  state.currentPlayer = v; break;
+        case 5:  state.setupRound = v; break;
+        case 6:  state.hasRolled = v !== 0; break;
+        case 7:  state.die1 = v; break;
+        case 8:  state.die2 = v; break;
         case 9:  state.revealNumber = v; break;
-        case 15: state.vp[0] = v; break;
-        case 16: state.vp[1] = v; break;
-        case 17: state.vp[2] = v; break;
-        case 18: state.vp[3] = v; break;
-        case 19: state.resLumber = v; break;
-        case 20: state.resWool = v; break;
-        case 21: state.resGrain = v; break;
-        case 22: state.resBrick = v; break;
-        case 23: state.resOre = v; break;
-        case 24: state.winnerId = v; break;
-        case 25: state.setupRound = v; break;
-        case 26: state.hasRolled = v !== 0; break;
+        case 10: state.winnerId = v; break;
+        case 11: state.robberTile = v; break;
+        case 12: state.connectedMask = v; break;
       }
     } else if (wireType === 2) {
       let len: number;
       [len, offset] = readVarint(buf, offset);
-      const s = decodeBytes(buf.slice(offset, offset + len));
+      const chunk = buf.slice(offset, offset + len);
       offset += len;
       switch (fieldNum) {
-        case 10: state.line1 = s; break;
-        case 11: state.line2 = s; break;
-        case 12: state.btnLeft = s; break;
-        case 13: state.btnCenter = s; break;
-        case 14: state.btnRight = s; break;
+        case 13: state.tiles = unpackTiles(chunk); break;
+        case 14: {
+          // Packed repeated uint32 — decode each element.
+          const vps: number[] = [];
+          let o = 0;
+          while (o < chunk.length) {
+            let v: number;
+            [v, o] = readVarint(chunk, o);
+            vps.push(v);
+          }
+          // Always expose exactly 4 slots (missing = 0)
+          state.vp = [vps[0] ?? 0, vps[1] ?? 0, vps[2] ?? 0, vps[3] ?? 0];
+          break;
+        }
       }
     } else {
-      // Unknown wire type — stop parsing to avoid corruption
       break;
     }
   }
-
   return state;
 }
 
-export { NO_WINNER };
+// Back-compat alias for callers that already use decodeBoardToPlayer name.
+export const decodeBoardState = decodeBoardStateFrame;

@@ -2,160 +2,84 @@ syntax = "proto3";
 
 package catan;
 
-// ── Wire-frame format (I2C only) ─────────────────────────────────────────────
+// =============================================================================
+// Settlers of Catan — wire protocol (v3)
 //
-//   Every I2C message (both directions) is prefixed with a 2-byte header
-//   before the raw NanoPB payload:
+// Architecture (all links share the same framing and both messages):
 //
-//     [0xCA] [payload_len : uint8] [nanopb_bytes : payload_len bytes]
+//   [Arduino Mega board]  --I2C master-->  [Heltec V3 bridge]
+//   [Heltec V3 bridge]    --LoRa-->        [Heltec V3 player x4]
+//   [Heltec V3 player]    --BLE-->         [mobile app]
 //
-//   0xCA = "CA"tan magic byte.  payload_len ≤ 127 (sufficient for all
-//   current messages).  Receivers MUST discard frames whose first byte ≠ 0xCA.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/* ================================================================= */
-/* Central Board → Player Station                                     */
-/*                                                                    */
-/* Sent by the Arduino Mega (I2C master) to each ESP32 player         */
-/* station (I2C slave).  Contains everything the player display needs. */
-/* ================================================================= */
-
-message BoardToPlayer {
-  // Schema version — always set to CATAN_PROTO_VERSION (currently 2).
-  // Receivers SHOULD discard messages with an unrecognised version.
-  uint32   proto_version  = 30;
-
-  MsgType  type           = 1;
-  GamePhase phase         = 2;
-  uint32   current_player = 3;   // 0-based index of whose turn it is
-  uint32   num_players    = 4;
-  uint32   your_player_id = 5;   // 0-based index assigned to this station
-
-  // Dice
-  uint32   die1           = 6;
-  uint32   die2           = 7;
-  uint32   dice_total     = 8;
-
-  // Number-reveal phase
-  uint32   reveal_number  = 9;
-
-  // Display strings (rendered on the OLED / forwarded to mobile)
-  string   line1          = 10;
-  string   line2          = 11;
-  string   btn_left       = 12;  // label for left action
-  string   btn_center     = 13;  // label for centre action
-  string   btn_right      = 14;  // label for right action
-
-  // Victory points per player slot (index 0-3)
-  uint32   vp0            = 15;
-  uint32   vp1            = 16;
-  uint32   vp2            = 17;
-  uint32   vp3            = 18;
-
-  // Resources for the receiving player only
-  uint32   res_lumber     = 19;
-  uint32   res_wool       = 20;
-  uint32   res_grain      = 21;
-  uint32   res_brick      = 22;
-  uint32   res_ore        = 23;
-
-  // End-of-game
-  uint32   winner_id      = 24;
-
-  // Setup round tracking
-  uint32   setup_round    = 25;  // 1 or 2 during initial placement
-  bool     has_rolled     = 26;  // true if current player already rolled
-}
-
-/* ================================================================= */
-/* Player Station → Central Board                                     */
-/*                                                                    */
-/* Sent by an ESP32 player station when the Arduino master requests   */
-/* data via I2C read.  Also used over BLE for mobile commands.        */
-/*                                                                    */
-/* Preferred uplink flow:                                             */
-/*   Physical button press  →  set button field (MSG_BUTTON_EVENT)   */
-/*   BLE / semantic action  →  set action  field (MSG_ACTION)         */
-/* Both fields may be present; the board interprets action first when */
-/* it is not ACTION_NONE.                                             */
-/* ================================================================= */
-
-message PlayerToBoard {
-  MsgType      type   = 1;
-  ButtonId     button = 2;   // raw button press (BTN_LEFT / CENTER / RIGHT)
-  PlayerAction action = 3;   // semantic action (preferred for BLE clients)
-}
-
-/* ================================================================= */
-/* Enums                                                              */
-/* ================================================================= */
-
-enum MsgType {
-  MSG_NONE          = 0;
-
-  // Central → Player
-  MSG_GAME_STATE    = 1;   // Full state sync (sent every cycle)
-  MSG_DICE_RESULT   = 2;   // Dice result notification
-  MSG_PROMPT        = 3;   // Display prompt with button labels
-
-  // Player → Central
-  MSG_BUTTON_EVENT  = 10;  // A raw button was pressed
-  MSG_PLAYER_READY  = 11;  // Station is alive (response to poll)
-  MSG_ACTION        = 12;  // A semantic player action was triggered
-}
+// Board  -> Bridge -> Player -> Mobile :  BoardState
+// Mobile -> Player -> Bridge -> Board  :  PlayerInput
+//
+// Wire frame (on every hop — I2C, LoRa, BLE):
+//
+//   [0xCA magic] [len: uint8] [nanopb payload: len bytes]
+//
+// Receivers MUST discard frames whose first byte is not 0xCA.
+// Maximum payload length is 200 bytes.
+//
+// Schema version: 3 — increment whenever field semantics change.
+// =============================================================================
 
 enum GamePhase {
-  PHASE_WAITING_FOR_PLAYERS = 0;
-  PHASE_BOARD_SETUP         = 1;
-  PHASE_NUMBER_REVEAL       = 2;
-  PHASE_INITIAL_PLACEMENT   = 3;   // Setup rounds: place settlements + roads
-  PHASE_PLAYING             = 4;   // Main game loop
-  PHASE_ROBBER              = 5;   // Must move robber (rolled 7)
-  PHASE_TRADE               = 6;   // Port/bank trading
-  PHASE_GAME_OVER           = 7;
+  PHASE_LOBBY             = 0;
+  PHASE_BOARD_SETUP       = 1;
+  PHASE_NUMBER_REVEAL     = 2;
+  PHASE_INITIAL_PLACEMENT = 3;
+  PHASE_PLAYING           = 4;
+  PHASE_ROBBER            = 5;
+  PHASE_GAME_OVER         = 6;
 }
 
-enum ButtonId {
-  BTN_NONE   = 0;
-  BTN_LEFT   = 1;
-  BTN_CENTER = 2;
-  BTN_RIGHT  = 3;
-}
-
-/* ── PlayerAction ──────────────────────────────────────────────────────────
- *
- * Semantic actions used by BLE clients (mobile apps).  The player station
- * maps each action to the equivalent ButtonId before forwarding to the board
- * so the board firmware requires no changes.
- *
- * Button-equivalent actions (ACTION_BTN_*) are a direct mapping and may be
- * used when the app wants pixel-perfect button parity.
- *
- * Semantic actions describe intent and are resolved against the current
- * GamePhase by the player station:
- *
- *   ACTION_ROLL_DICE    → BTN_LEFT   (PHASE_PLAYING, before roll)
- *   ACTION_END_TURN     → BTN_RIGHT  (PHASE_PLAYING, after roll)
- *   ACTION_TRADE        → BTN_LEFT   (PHASE_TRADE)
- *   ACTION_SKIP_ROBBER  → BTN_CENTER (PHASE_ROBBER)
- *   ACTION_PLACE_DONE   → BTN_CENTER (PHASE_INITIAL_PLACEMENT)
- *   ACTION_START_GAME   → BTN_LEFT   (PHASE_WAITING_FOR_PLAYERS)
- *   ACTION_NEXT_NUMBER  → BTN_CENTER (PHASE_NUMBER_REVEAL)
- * ──────────────────────────────────────────────────────────────────────── */
 enum PlayerAction {
-  ACTION_NONE         = 0;
+  ACTION_NONE        = 0;
+  ACTION_READY       = 1;
+  ACTION_START_GAME  = 2;
+  ACTION_NEXT_NUMBER = 3;
+  ACTION_PLACE_DONE  = 4;
+  ACTION_ROLL_DICE   = 5;
+  ACTION_END_TURN    = 6;
+  ACTION_SKIP_ROBBER = 7;
+  ACTION_REPORT      = 8;
+}
 
-  // Direct button equivalents
-  ACTION_BTN_LEFT     = 1;
-  ACTION_BTN_CENTER   = 2;
-  ACTION_BTN_RIGHT    = 3;
+// Biome codes (packed into `tiles_packed` high nibble of each byte).
+// Keep in sync with Biome enum in board firmware.
+//   0 = DESERT, 1 = FOREST, 2 = PASTURE, 3 = FIELD, 4 = HILL, 5 = MOUNTAIN
+//
+// Each byte of `tiles_packed` encodes one tile:
+//   high nibble = biome (0..5)
+//   low  nibble = number (0..12; 0 = desert/no number)
+// The robber lives on tile index `robber_tile`.
 
-  // Semantic actions (resolved by the player station)
-  ACTION_ROLL_DICE    = 4;   // Roll the dice (your turn, not yet rolled)
-  ACTION_END_TURN     = 5;   // End your turn
-  ACTION_TRADE        = 6;   // Enter trade phase / confirm trade
-  ACTION_SKIP_ROBBER  = 7;   // Skip/pass robber placement
-  ACTION_PLACE_DONE   = 8;   // Confirm piece placement (initial placement)
-  ACTION_START_GAME   = 9;   // Ready / start game (waiting phase)
-  ACTION_NEXT_NUMBER  = 10;  // Advance number reveal
+message BoardState {
+  uint32    proto_version  = 1;
+  GamePhase phase          = 2;
+  uint32    num_players    = 3;
+  uint32    current_player = 4;
+  uint32    setup_round    = 5;
+  bool      has_rolled     = 6;
+  uint32    die1           = 7;
+  uint32    die2           = 8;
+  uint32    reveal_number  = 9;
+  uint32    winner_id      = 10;
+  uint32    robber_tile    = 11;
+  uint32    connected_mask = 12;
+  bytes     tiles_packed   = 13;   // 19 bytes, one per tile (see above)
+  repeated uint32 vp       = 14;   // self-reported VP per player
+}
+
+message PlayerInput {
+  uint32       proto_version = 1;
+  uint32       player_id     = 2;
+  PlayerAction action        = 3;
+  uint32 vp         = 10;
+  uint32 res_lumber = 11;
+  uint32 res_wool   = 12;
+  uint32 res_grain  = 13;
+  uint32 res_brick  = 14;
+  uint32 res_ore    = 15;
 }

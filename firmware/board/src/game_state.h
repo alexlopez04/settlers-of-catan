@@ -1,47 +1,38 @@
 #pragma once
 // =============================================================================
-// game_state.h — Core Catan game logic and state tracking.
+// game_state.h — Simplified Catan game logic.
 //
-// Tracks: game phase, turns, resources, victory points, ownership,
-// robber, dice, number reveal, and initial-placement rounds.
+// The central board is now the authority on:
+//   - game phase / turn
+//   - tile layout (biomes + numbers) and the robber
+//   - piece placement (settlement / city / road ownership)
+//   - dice rolls and the number-reveal order
+//
+// Victory points and resources are tracked by the mobile app and reported
+// back to the board via PlayerInput(ACTION_REPORT).  The board does NOT
+// compute resource distribution — it only records the self-reported VP
+// values to broadcast them to other players.
 // =============================================================================
 
 #include <stdint.h>
 #include "config.h"
 #include "board_types.h"
 
-// ── Game phases (mirrored in catan.proto GamePhase enum) ────────────────────
 enum class GamePhase : uint8_t {
-    WAITING_FOR_PLAYERS,
+    LOBBY,
     BOARD_SETUP,
     NUMBER_REVEAL,
     INITIAL_PLACEMENT,
     PLAYING,
     ROBBER,
-    TRADE,
     GAME_OVER
 };
 
-// ── Ownership ───────────────────────────────────────────────────────────────
 static constexpr uint8_t NO_PLAYER = 0xFF;
 
-struct VertexState {
-    uint8_t owner;
-    bool    is_city;
-};
+struct VertexState { uint8_t owner; bool is_city; };
+struct EdgeState   { uint8_t owner; };
 
-struct EdgeState {
-    uint8_t owner;
-};
-
-// ── Player data ─────────────────────────────────────────────────────────────
-struct PlayerData {
-    uint8_t  resources[NUM_RESOURCES];  // lumber, wool, grain, brick, ore
-    uint8_t  victory_points;
-    bool     connected;
-};
-
-// ── Public interface ────────────────────────────────────────────────────────
 namespace game {
 
 void init();
@@ -49,28 +40,24 @@ void init();
 // Phase
 GamePhase phase();
 void      setPhase(GamePhase p);
+const char* phaseName(GamePhase p);
 
 // Players
 uint8_t numPlayers();
 void    setNumPlayers(uint8_t n);
 bool    playerConnected(uint8_t id);
 void    setPlayerConnected(uint8_t id, bool connected);
+uint8_t connectedMask();
 
-// Turn tracking
+// Turn
 uint8_t currentPlayer();
+void    setCurrentPlayer(uint8_t id);
 void    nextTurn();
 
-// Resources
-uint8_t playerResource(uint8_t player, uint8_t res_idx);
-void    addResource(uint8_t player, uint8_t res_idx, uint8_t amount);
-bool    removeResource(uint8_t player, uint8_t res_idx, uint8_t amount);
-uint8_t totalResources(uint8_t player);
-void    distributeResources(uint8_t dice_total);  // Give resources for rolled number
-
-// Victory points
-uint8_t victoryPoints(uint8_t player);
-void    recalcVictoryPoints(uint8_t player);
-uint8_t checkWinner();  // Returns player ID or NO_PLAYER
+// Self-reported VP (via PlayerInput ACTION_REPORT)
+uint8_t reportedVp(uint8_t player);
+void    setReportedVp(uint8_t player, uint8_t vp);
+uint8_t checkWinner();                // returns player id or NO_PLAYER
 
 // Ownership
 const VertexState& vertexState(uint8_t vertex_id);
@@ -88,11 +75,15 @@ uint8_t currentRevealNumber();
 bool    advanceReveal();
 void    resetReveal();
 
-// Initial placement
-uint8_t setupRound();          // Current round (1 or 2)
-bool    advanceSetupRound();   // Returns false when all rounds complete
-void    resetSetupRound();
-uint8_t setupPlacementsLeft(uint8_t player);  // How many placements remain this round
+// Initial placement — snake draft
+// resetSetupRound(first) builds the snake sequence starting from `first`.
+// advanceSetupTurn() steps to the next slot; returns false when all 2*N turns
+// are complete (i.e. the caller should enter PLAYING).
+uint8_t setupRound();        // 1 = forward, 2 = reverse
+uint8_t setupTurn();         // 0-based position in the 2*N sequence
+uint8_t setupFirstPlayer();  // the randomly chosen starting player
+void    resetSetupRound(uint8_t first_player);
+bool    advanceSetupTurn();
 
 // Dice
 uint8_t lastDie1();
@@ -101,12 +92,6 @@ uint8_t lastDiceTotal();
 void    rollDice();
 bool    hasRolled();
 void    setHasRolled(bool rolled);
-
-// Trade — port-based bank trade
-bool canPortTrade(uint8_t player, uint8_t give_res, uint8_t get_res);
-void doPortTrade(uint8_t player, uint8_t give_res, uint8_t get_res);
-
-// Get player data struct for proto serialization
-const PlayerData& playerData(uint8_t player);
+void    clearDice();
 
 }  // namespace game

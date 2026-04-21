@@ -10,117 +10,59 @@
 #endif
 
 /* Enum definitions */
-typedef enum _catan_MsgType {
-    catan_MsgType_MSG_NONE = 0,
-    /* Central → Player */
-    catan_MsgType_MSG_GAME_STATE = 1, /* Full state sync (sent every cycle) */
-    catan_MsgType_MSG_DICE_RESULT = 2, /* Dice result notification */
-    catan_MsgType_MSG_PROMPT = 3, /* Display prompt with button labels */
-    /* Player → Central */
-    catan_MsgType_MSG_BUTTON_EVENT = 10, /* A raw button was pressed */
-    catan_MsgType_MSG_PLAYER_READY = 11, /* Station is alive (response to poll) */
-    catan_MsgType_MSG_ACTION = 12 /* A semantic player action was triggered */
-} catan_MsgType;
-
 typedef enum _catan_GamePhase {
-    catan_GamePhase_PHASE_WAITING_FOR_PLAYERS = 0,
+    catan_GamePhase_PHASE_LOBBY = 0,
     catan_GamePhase_PHASE_BOARD_SETUP = 1,
     catan_GamePhase_PHASE_NUMBER_REVEAL = 2,
-    catan_GamePhase_PHASE_INITIAL_PLACEMENT = 3, /* Setup rounds: place settlements + roads */
-    catan_GamePhase_PHASE_PLAYING = 4, /* Main game loop */
-    catan_GamePhase_PHASE_ROBBER = 5, /* Must move robber (rolled 7) */
-    catan_GamePhase_PHASE_TRADE = 6, /* Port/bank trading */
-    catan_GamePhase_PHASE_GAME_OVER = 7
+    catan_GamePhase_PHASE_INITIAL_PLACEMENT = 3,
+    catan_GamePhase_PHASE_PLAYING = 4,
+    catan_GamePhase_PHASE_ROBBER = 5,
+    catan_GamePhase_PHASE_GAME_OVER = 6
 } catan_GamePhase;
 
-typedef enum _catan_ButtonId {
-    catan_ButtonId_BTN_NONE = 0,
-    catan_ButtonId_BTN_LEFT = 1,
-    catan_ButtonId_BTN_CENTER = 2,
-    catan_ButtonId_BTN_RIGHT = 3
-} catan_ButtonId;
-
-/* ── PlayerAction ──────────────────────────────────────────────────────────
-
- Semantic actions used by BLE clients (mobile apps).  The player station
- maps each action to the equivalent ButtonId before forwarding to the board
- so the board firmware requires no changes.
-
- Button-equivalent actions (ACTION_BTN_*) are a direct mapping and may be
- used when the app wants pixel-perfect button parity.
-
- Semantic actions describe intent and are resolved against the current
- GamePhase by the player station:
-
-   ACTION_ROLL_DICE    → BTN_LEFT   (PHASE_PLAYING, before roll)
-   ACTION_END_TURN     → BTN_RIGHT  (PHASE_PLAYING, after roll)
-   ACTION_TRADE        → BTN_LEFT   (PHASE_TRADE)
-   ACTION_SKIP_ROBBER  → BTN_CENTER (PHASE_ROBBER)
-   ACTION_PLACE_DONE   → BTN_CENTER (PHASE_INITIAL_PLACEMENT)
-   ACTION_START_GAME   → BTN_LEFT   (PHASE_WAITING_FOR_PLAYERS)
-   ACTION_NEXT_NUMBER  → BTN_CENTER (PHASE_NUMBER_REVEAL)
- ──────────────────────────────────────────────────────────────────────── */
 typedef enum _catan_PlayerAction {
     catan_PlayerAction_ACTION_NONE = 0,
-    /* Direct button equivalents */
-    catan_PlayerAction_ACTION_BTN_LEFT = 1,
-    catan_PlayerAction_ACTION_BTN_CENTER = 2,
-    catan_PlayerAction_ACTION_BTN_RIGHT = 3,
-    /* Semantic actions (resolved by the player station) */
-    catan_PlayerAction_ACTION_ROLL_DICE = 4, /* Roll the dice (your turn, not yet rolled) */
-    catan_PlayerAction_ACTION_END_TURN = 5, /* End your turn */
-    catan_PlayerAction_ACTION_TRADE = 6, /* Enter trade phase / confirm trade */
-    catan_PlayerAction_ACTION_SKIP_ROBBER = 7, /* Skip/pass robber placement */
-    catan_PlayerAction_ACTION_PLACE_DONE = 8, /* Confirm piece placement (initial placement) */
-    catan_PlayerAction_ACTION_START_GAME = 9, /* Ready / start game (waiting phase) */
-    catan_PlayerAction_ACTION_NEXT_NUMBER = 10 /* Advance number reveal */
+    catan_PlayerAction_ACTION_READY = 1,
+    catan_PlayerAction_ACTION_START_GAME = 2,
+    catan_PlayerAction_ACTION_NEXT_NUMBER = 3,
+    catan_PlayerAction_ACTION_PLACE_DONE = 4,
+    catan_PlayerAction_ACTION_ROLL_DICE = 5,
+    catan_PlayerAction_ACTION_END_TURN = 6,
+    catan_PlayerAction_ACTION_SKIP_ROBBER = 7,
+    catan_PlayerAction_ACTION_REPORT = 8
 } catan_PlayerAction;
 
 /* Struct definitions */
-typedef struct _catan_BoardToPlayer {
-    catan_MsgType type;
+typedef PB_BYTES_ARRAY_T(19) catan_BoardState_tiles_packed_t;
+typedef struct _catan_BoardState {
+    uint32_t proto_version;
     catan_GamePhase phase;
-    uint32_t current_player; /* 0-based index of whose turn it is */
     uint32_t num_players;
-    uint32_t your_player_id; /* 0-based index assigned to this station */
-    /* Dice */
+    uint32_t current_player;
+    uint32_t setup_round;
+    bool has_rolled;
     uint32_t die1;
     uint32_t die2;
-    uint32_t dice_total;
-    /* Number-reveal phase */
     uint32_t reveal_number;
-    /* Display strings (rendered on the OLED / forwarded to mobile) */
-    char line1[22];
-    char line2[22];
-    char btn_left[8]; /* label for left action */
-    char btn_center[8]; /* label for centre action */
-    char btn_right[8]; /* label for right action */
-    /* Victory points per player slot (index 0-3) */
-    uint32_t vp0;
-    uint32_t vp1;
-    uint32_t vp2;
-    uint32_t vp3;
-    /* Resources for the receiving player only */
+    uint32_t winner_id;
+    uint32_t robber_tile;
+    uint32_t connected_mask;
+    catan_BoardState_tiles_packed_t tiles_packed; /* 19 bytes, one per tile (see above) */
+    pb_size_t vp_count;
+    uint32_t vp[4]; /* self-reported VP per player */
+} catan_BoardState;
+
+typedef struct _catan_PlayerInput {
+    uint32_t proto_version;
+    uint32_t player_id;
+    catan_PlayerAction action;
+    uint32_t vp;
     uint32_t res_lumber;
     uint32_t res_wool;
     uint32_t res_grain;
     uint32_t res_brick;
     uint32_t res_ore;
-    /* End-of-game */
-    uint32_t winner_id;
-    /* Setup round tracking */
-    uint32_t setup_round; /* 1 or 2 during initial placement */
-    bool has_rolled; /* true if current player already rolled */
-    /* Schema version — always set to CATAN_PROTO_VERSION (currently 2).
- Receivers SHOULD discard messages with an unrecognised version. */
-    uint32_t proto_version;
-} catan_BoardToPlayer;
-
-typedef struct _catan_PlayerToBoard {
-    catan_MsgType type;
-    catan_ButtonId button; /* raw button press (BTN_LEFT / CENTER / RIGHT) */
-    catan_PlayerAction action; /* semantic action (preferred for BLE clients) */
-} catan_PlayerToBoard;
+} catan_PlayerInput;
 
 
 #ifdef __cplusplus
@@ -128,118 +70,93 @@ extern "C" {
 #endif
 
 /* Helper constants for enums */
-#define _catan_MsgType_MIN catan_MsgType_MSG_NONE
-#define _catan_MsgType_MAX catan_MsgType_MSG_ACTION
-#define _catan_MsgType_ARRAYSIZE ((catan_MsgType)(catan_MsgType_MSG_ACTION+1))
-
-#define _catan_GamePhase_MIN catan_GamePhase_PHASE_WAITING_FOR_PLAYERS
+#define _catan_GamePhase_MIN catan_GamePhase_PHASE_LOBBY
 #define _catan_GamePhase_MAX catan_GamePhase_PHASE_GAME_OVER
 #define _catan_GamePhase_ARRAYSIZE ((catan_GamePhase)(catan_GamePhase_PHASE_GAME_OVER+1))
 
-#define _catan_ButtonId_MIN catan_ButtonId_BTN_NONE
-#define _catan_ButtonId_MAX catan_ButtonId_BTN_RIGHT
-#define _catan_ButtonId_ARRAYSIZE ((catan_ButtonId)(catan_ButtonId_BTN_RIGHT+1))
-
 #define _catan_PlayerAction_MIN catan_PlayerAction_ACTION_NONE
-#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_NEXT_NUMBER
-#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_NEXT_NUMBER+1))
+#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_REPORT
+#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_REPORT+1))
 
-#define catan_BoardToPlayer_type_ENUMTYPE catan_MsgType
-#define catan_BoardToPlayer_phase_ENUMTYPE catan_GamePhase
+#define catan_BoardState_phase_ENUMTYPE catan_GamePhase
 
-#define catan_PlayerToBoard_type_ENUMTYPE catan_MsgType
-#define catan_PlayerToBoard_button_ENUMTYPE catan_ButtonId
-#define catan_PlayerToBoard_action_ENUMTYPE catan_PlayerAction
+#define catan_PlayerInput_action_ENUMTYPE catan_PlayerAction
 
 
 /* Initializer values for message structs */
-#define catan_BoardToPlayer_init_default         {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerToBoard_init_default         {_catan_MsgType_MIN, _catan_ButtonId_MIN, _catan_PlayerAction_MIN}
-#define catan_BoardToPlayer_init_zero            {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerToBoard_init_zero            {_catan_MsgType_MIN, _catan_ButtonId_MIN, _catan_PlayerAction_MIN}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}}
+#define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, 0, 0, 0, 0, 0, 0}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}}
+#define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, 0, 0, 0, 0, 0, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
-#define catan_BoardToPlayer_type_tag             1
-#define catan_BoardToPlayer_phase_tag            2
-#define catan_BoardToPlayer_current_player_tag   3
-#define catan_BoardToPlayer_num_players_tag      4
-#define catan_BoardToPlayer_your_player_id_tag   5
-#define catan_BoardToPlayer_die1_tag             6
-#define catan_BoardToPlayer_die2_tag             7
-#define catan_BoardToPlayer_dice_total_tag       8
-#define catan_BoardToPlayer_reveal_number_tag    9
-#define catan_BoardToPlayer_line1_tag            10
-#define catan_BoardToPlayer_line2_tag            11
-#define catan_BoardToPlayer_btn_left_tag         12
-#define catan_BoardToPlayer_btn_center_tag       13
-#define catan_BoardToPlayer_btn_right_tag        14
-#define catan_BoardToPlayer_vp0_tag              15
-#define catan_BoardToPlayer_vp1_tag              16
-#define catan_BoardToPlayer_vp2_tag              17
-#define catan_BoardToPlayer_vp3_tag              18
-#define catan_BoardToPlayer_res_lumber_tag       19
-#define catan_BoardToPlayer_res_wool_tag         20
-#define catan_BoardToPlayer_res_grain_tag        21
-#define catan_BoardToPlayer_res_brick_tag        22
-#define catan_BoardToPlayer_res_ore_tag          23
-#define catan_BoardToPlayer_winner_id_tag        24
-#define catan_BoardToPlayer_setup_round_tag      25
-#define catan_BoardToPlayer_has_rolled_tag       26
-#define catan_BoardToPlayer_proto_version_tag    30
-#define catan_PlayerToBoard_type_tag             1
-#define catan_PlayerToBoard_button_tag           2
-#define catan_PlayerToBoard_action_tag           3
+#define catan_BoardState_proto_version_tag       1
+#define catan_BoardState_phase_tag               2
+#define catan_BoardState_num_players_tag         3
+#define catan_BoardState_current_player_tag      4
+#define catan_BoardState_setup_round_tag         5
+#define catan_BoardState_has_rolled_tag          6
+#define catan_BoardState_die1_tag                7
+#define catan_BoardState_die2_tag                8
+#define catan_BoardState_reveal_number_tag       9
+#define catan_BoardState_winner_id_tag           10
+#define catan_BoardState_robber_tile_tag         11
+#define catan_BoardState_connected_mask_tag      12
+#define catan_BoardState_tiles_packed_tag        13
+#define catan_BoardState_vp_tag                  14
+#define catan_PlayerInput_proto_version_tag      1
+#define catan_PlayerInput_player_id_tag          2
+#define catan_PlayerInput_action_tag             3
+#define catan_PlayerInput_vp_tag                 10
+#define catan_PlayerInput_res_lumber_tag         11
+#define catan_PlayerInput_res_wool_tag           12
+#define catan_PlayerInput_res_grain_tag          13
+#define catan_PlayerInput_res_brick_tag          14
+#define catan_PlayerInput_res_ore_tag            15
 
 /* Struct field encoding specification for nanopb */
-#define catan_BoardToPlayer_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UENUM,    type,              1) \
+#define catan_BoardState_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   proto_version,     1) \
 X(a, STATIC,   SINGULAR, UENUM,    phase,             2) \
-X(a, STATIC,   SINGULAR, UINT32,   current_player,    3) \
-X(a, STATIC,   SINGULAR, UINT32,   num_players,       4) \
-X(a, STATIC,   SINGULAR, UINT32,   your_player_id,    5) \
-X(a, STATIC,   SINGULAR, UINT32,   die1,              6) \
-X(a, STATIC,   SINGULAR, UINT32,   die2,              7) \
-X(a, STATIC,   SINGULAR, UINT32,   dice_total,        8) \
+X(a, STATIC,   SINGULAR, UINT32,   num_players,       3) \
+X(a, STATIC,   SINGULAR, UINT32,   current_player,    4) \
+X(a, STATIC,   SINGULAR, UINT32,   setup_round,       5) \
+X(a, STATIC,   SINGULAR, BOOL,     has_rolled,        6) \
+X(a, STATIC,   SINGULAR, UINT32,   die1,              7) \
+X(a, STATIC,   SINGULAR, UINT32,   die2,              8) \
 X(a, STATIC,   SINGULAR, UINT32,   reveal_number,     9) \
-X(a, STATIC,   SINGULAR, STRING,   line1,            10) \
-X(a, STATIC,   SINGULAR, STRING,   line2,            11) \
-X(a, STATIC,   SINGULAR, STRING,   btn_left,         12) \
-X(a, STATIC,   SINGULAR, STRING,   btn_center,       13) \
-X(a, STATIC,   SINGULAR, STRING,   btn_right,        14) \
-X(a, STATIC,   SINGULAR, UINT32,   vp0,              15) \
-X(a, STATIC,   SINGULAR, UINT32,   vp1,              16) \
-X(a, STATIC,   SINGULAR, UINT32,   vp2,              17) \
-X(a, STATIC,   SINGULAR, UINT32,   vp3,              18) \
-X(a, STATIC,   SINGULAR, UINT32,   res_lumber,       19) \
-X(a, STATIC,   SINGULAR, UINT32,   res_wool,         20) \
-X(a, STATIC,   SINGULAR, UINT32,   res_grain,        21) \
-X(a, STATIC,   SINGULAR, UINT32,   res_brick,        22) \
-X(a, STATIC,   SINGULAR, UINT32,   res_ore,          23) \
-X(a, STATIC,   SINGULAR, UINT32,   winner_id,        24) \
-X(a, STATIC,   SINGULAR, UINT32,   setup_round,      25) \
-X(a, STATIC,   SINGULAR, BOOL,     has_rolled,       26) \
-X(a, STATIC,   SINGULAR, UINT32,   proto_version,    30)
-#define catan_BoardToPlayer_CALLBACK NULL
-#define catan_BoardToPlayer_DEFAULT NULL
+X(a, STATIC,   SINGULAR, UINT32,   winner_id,        10) \
+X(a, STATIC,   SINGULAR, UINT32,   robber_tile,      11) \
+X(a, STATIC,   SINGULAR, UINT32,   connected_mask,   12) \
+X(a, STATIC,   SINGULAR, BYTES,    tiles_packed,     13) \
+X(a, STATIC,   REPEATED, UINT32,   vp,               14)
+#define catan_BoardState_CALLBACK NULL
+#define catan_BoardState_DEFAULT NULL
 
-#define catan_PlayerToBoard_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UENUM,    type,              1) \
-X(a, STATIC,   SINGULAR, UENUM,    button,            2) \
-X(a, STATIC,   SINGULAR, UENUM,    action,            3)
-#define catan_PlayerToBoard_CALLBACK NULL
-#define catan_PlayerToBoard_DEFAULT NULL
+#define catan_PlayerInput_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   proto_version,     1) \
+X(a, STATIC,   SINGULAR, UINT32,   player_id,         2) \
+X(a, STATIC,   SINGULAR, UENUM,    action,            3) \
+X(a, STATIC,   SINGULAR, UINT32,   vp,               10) \
+X(a, STATIC,   SINGULAR, UINT32,   res_lumber,       11) \
+X(a, STATIC,   SINGULAR, UINT32,   res_wool,         12) \
+X(a, STATIC,   SINGULAR, UINT32,   res_grain,        13) \
+X(a, STATIC,   SINGULAR, UINT32,   res_brick,        14) \
+X(a, STATIC,   SINGULAR, UINT32,   res_ore,          15)
+#define catan_PlayerInput_CALLBACK NULL
+#define catan_PlayerInput_DEFAULT NULL
 
-extern const pb_msgdesc_t catan_BoardToPlayer_msg;
-extern const pb_msgdesc_t catan_PlayerToBoard_msg;
+extern const pb_msgdesc_t catan_BoardState_msg;
+extern const pb_msgdesc_t catan_PlayerInput_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
-#define catan_BoardToPlayer_fields &catan_BoardToPlayer_msg
-#define catan_PlayerToBoard_fields &catan_PlayerToBoard_msg
+#define catan_BoardState_fields &catan_BoardState_msg
+#define catan_PlayerInput_fields &catan_PlayerInput_msg
 
 /* Maximum encoded size of messages (where known) */
-#define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardToPlayer_size
-#define catan_BoardToPlayer_size                 205
-#define catan_PlayerToBoard_size                 6
+#define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardState_size
+#define catan_BoardState_size                    109
+#define catan_PlayerInput_size                   50
 
 #ifdef __cplusplus
 } /* extern "C" */
