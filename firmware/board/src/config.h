@@ -25,7 +25,14 @@ static constexpr uint8_t PINS_PER_EXPANDER = 8;
 
 // ── Bridge (Heltec V3) UART link — hardware Serial1 (TX=18, RX=19 on Mega) ──
 // Cross-connect: Mega TX(18) → Bridge RX, Mega RX(19) → Bridge TX.
-static constexpr uint32_t BRIDGE_SERIAL_BAUD = 115200;
+//
+// Baud deliberately kept below 115200: the Mega drives TX at 5 V logic but
+// the ESP32-S3 RX pin is only 3.3 V-tolerant, so without a level shifter the
+// slew rate / overshoot on the unshifted line corrupts a large fraction of
+// frames at 115200. 38400 is slow enough for clean edges yet fast enough to
+// push a ~42-byte BoardState in ~11 ms — well under the 200 ms broadcast
+// cadence. If you add a proper level shifter you can raise this back up.
+static constexpr uint32_t BRIDGE_SERIAL_BAUD = 38400;
 
 // ── Players ─────────────────────────────────────────────────────────────────
 static constexpr uint8_t MAX_PLAYERS = 4;
@@ -41,6 +48,12 @@ static constexpr uint8_t EDGE_COUNT   = 72;
 static constexpr uint32_t SENSOR_POLL_MS      = 20;
 static constexpr uint32_t STATE_BROADCAST_MS  = 200;   // BoardState push cadence
 static constexpr uint32_t INPUT_POLL_MS       = 50;    // Poll bridge for PlayerInput
+
+// ── Demo Mode ────────────────────────────────────────────────────────────────
+// When true, skip all game logic and cycle each tile through random resource
+// colors every DEMO_CYCLE_MS milliseconds.
+static constexpr bool     DEMO_MODE      = false;
+static constexpr uint32_t DEMO_CYCLE_MS  = 2000;
 
 // ── Game Rules ──────────────────────────────────────────────────────────────
 static constexpr uint8_t  VP_TO_WIN      = 10;

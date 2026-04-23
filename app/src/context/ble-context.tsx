@@ -247,7 +247,6 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       const id = input.playerId ?? playerId ?? 0;
       await writePayload(
         encodePlayerInput({
-          protoVersion: input.protoVersion ?? 3,
           playerId: id,
           action: input.action,
           vp: input.vp,

@@ -2,16 +2,18 @@
 // =============================================================================
 // comm_manager.h — UART serial link to the ESP32 bridge (Serial1).
 //
-// Hardware: Mega Serial1  TX=18 → Bridge RX  |  Bridge TX → Mega RX=19
+// Speaks the v4 wire protocol: every payload is a framed catan_Envelope.
 //
-// Downstream (board → bridge → players → mobile):  BoardState
-// Upstream   (mobile → player → bridge → board):   PlayerInput
+// Downstream (board → bridge → players → mobile):
+//     Envelope { BoardState | Ack | Nack }
+// Upstream   (mobile → player → bridge → board):
+//     Envelope { PlayerInput | SyncRequest }
 //
-// Frame format (see catan_wire.h):  [0xCA] [len] [nanopb payload]
-//
-// The bridge pushes PlayerInput frames as soon as they arrive from LoRa.
-// pollPlayerInput() drains the Serial1 RX buffer and returns the next
-// fully-assembled frame; call it in a tight loop until it returns false.
+// Reliability (Phase 1):
+//   - Outgoing BoardState broadcasts are reliable=false (next tick wins).
+//   - Outgoing Acks are reliable=false.
+//   - Incoming reliable envelopes are deduplicated by (sender_id, seq) and
+//     auto-Acked inside pollPlayerInput().
 // =============================================================================
 
 #include <stdint.h>
@@ -21,13 +23,36 @@ namespace comm {
 
 void init();
 
-// Push the current BoardState snapshot to the bridge.
-// Returns true if the frame was delivered successfully over I2C.
+// Send the current BoardState snapshot (wrapped in an Envelope) to the bridge.
+// Fills in proto_version, sender_id=BOARD, a fresh sequence_number, and
+// timestamp_ms automatically. Returns true on successful transmit.
 bool sendBoardState(const catan_BoardState& state);
 
-// Poll the bridge for one pending PlayerInput frame.
-// Returns true if a valid frame was received (and decoded into `out`).
-// Returns false when there is no pending input or decoding failed.
-bool pollPlayerInput(catan_PlayerInput& out);
+// Low-level: wrap the caller-supplied body in an envelope (caller sets
+// which_body and the body contents; this function fills in header fields
+// and transmits). `reliable` is copied into the envelope.
+bool sendEnvelopeBody(catan_Envelope& env, bool reliable);
+
+// Convenience: transmit an Ack addressed to (to_sender, seq).
+bool sendAck(uint32_t to_sender, uint32_t seq);
+
+// Poll the bridge for one pending PlayerInput.
+// Returns true iff a valid, non-duplicate PlayerInput envelope arrived and
+// was successfully acked (if reliable). `out` is populated with the input
+// and `out_sender` with the originating envelope's sender_id.
+bool pollPlayerInput(catan_PlayerInput& out, uint32_t& out_sender);
+
+// Diagnostics — counters bumped by the comm manager for logging / heartbeats.
+struct Stats {
+    uint32_t tx_boardstate;   // BoardState envelopes transmitted
+    uint32_t tx_ack;          // Acks transmitted
+    uint32_t tx_bytes;        // total bytes pushed to Serial1 TX
+    uint32_t rx_bytes;        // total bytes drained from Serial1 RX
+    uint32_t rx_frames_ok;    // valid envelopes decoded
+    uint32_t rx_frames_bad;   // decode / framing / validation failures
+    uint32_t rx_dups;         // duplicate reliable envelopes dropped
+};
+
+const Stats& stats();
 
 }  // namespace comm

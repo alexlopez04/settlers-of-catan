@@ -6,7 +6,6 @@
 #include "board_topology.h"
 #include "dice.h"
 #include <string.h>
-#include <Arduino.h>
 
 namespace {
 

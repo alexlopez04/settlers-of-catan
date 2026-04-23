@@ -15,7 +15,7 @@
 
 #include "board_topology.h"
 #include "board_types.h"
-#include <Arduino.h>
+#include "core/rng.h"
 #include <string.h>
 
 // ── Human-readable names ────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ uint8_t tilesForEdge(uint8_t edge_id, uint8_t out[], uint8_t max_out) {
 
 static void shuffleArray(uint8_t* arr, uint8_t n) {
     for (uint8_t i = n - 1; i > 0; --i) {
-        uint8_t j = random(0, i + 1);
+        uint8_t j = (uint8_t)core::rng::uniform((uint32_t)i + 1u);
         uint8_t tmp = arr[i];
         arr[i] = arr[j];
         arr[j] = tmp;

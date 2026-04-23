@@ -1,17 +1,17 @@
 // =============================================================================
 // main.cpp — Settlers of Catan: Arduino Mega central board controller.
 //
-// Responsibilities:
-//   - Own the authoritative game phase, turn order, piece placement,
-//     board layout (biomes + numbers), the robber, and dice rolls.
-//   - Drive all tile/port LEDs.
-//   - Read hall-effect sensors (direct GPIO + PCF8574 I2C expanders).
-//   - Publish BoardState snapshots to the bridge over I2C (master).
-//   - Consume PlayerInput frames returned by the bridge (master reads).
+// This file is now a thin I/O shell:
+//   - It reads hall-effect sensors (debounced in sensor_manager) and feeds
+//     presence events into `core::StateMachine`.
+//   - It polls the bridge for `PlayerInput` envelopes and forwards them.
+//   - On every loop it drains `Effect`s from the StateMachine and applies
+//     them to the LED strip, serial log, and comm broadcasts.
 //
-// The bridge (Heltec V3, address BRIDGE_I2C_ADDR=0x30) is the only I2C
-// slave on the downstream side.  The bridge handles all LoRa communication
-// with the player stations.
+// All game logic — phase transitions, placement validation, dice, turn
+// order, winner checks — lives in `firmware/board/src/core/` and is pure
+// (no Arduino, no hardware) so it can be compiled for the native host and
+// exercised by `firmware/board/native/sim_main.cpp`.
 // =============================================================================
 
 #include <Arduino.h>
@@ -19,6 +19,7 @@
 
 #include "config.h"
 #include "catan_wire.h"
+#include "catan_log.h"
 #include "board_types.h"
 #include "board_topology.h"
 #include "led_manager.h"
@@ -27,37 +28,44 @@
 #include "dice.h"
 #include "comm_manager.h"
 #include "proto/catan.pb.h"
+#include "core/state_machine.h"
+#include "core/events.h"
+#include "core/rng.h"
 
-// ── Forward declarations ────────────────────────────────────────────────────
-static void handleLobby();
-static void handleBoardSetup();
-static void handleNumberReveal();
-static void handleInitialPlacement();
-static void handlePlaying();
-static void handleRobber();
-static void handleGameOver();
+static core::StateMachine sm;
 
-static void consumePlayerInputs();
-static void broadcastBoardState();
-
-// ── State ───────────────────────────────────────────────────────────────────
-static uint32_t last_broadcast_ms = 0;
+// ── Timing ──────────────────────────────────────────────────────────────────
+static constexpr uint32_t HEARTBEAT_MS = 5000;
+static uint32_t last_broadcast_ms  = 0;
 static uint32_t last_input_poll_ms = 0;
+static uint32_t last_heartbeat_ms  = 0;
+static uint32_t last_demo_ms       = 0;
+static uint32_t loop_count         = 0;
 
-// Latest semantic input captured for the current player (cleared after use).
-static catan_PlayerAction pending_current_action = catan_PlayerAction_ACTION_NONE;
-// Any player can trigger these transitions — set when seen, cleared on use.
-static bool pending_start_game   = false;
-static bool pending_next_number  = false;
-// Set to false whenever BOARD_SETUP is entered; guards one-shot board init.
-static bool board_setup_done     = false;
-
-// Randomly chosen starting player (set when START_GAME is accepted in LOBBY).
-static uint8_t s_first_player = 0;
-
+// ── Player colours for LED feedback ────────────────────────────────────────
 static const CRGB kPlayerColors[MAX_PLAYERS] = {
     CRGB::Red, CRGB::Blue, CRGB::Orange, CRGB::White
 };
+
+// ── Demo Mode ───────────────────────────────────────────────────────────────
+// One colour per resource type (matches led_manager biomeColor palette).
+static const CRGB kDemoColors[] = {
+    CRGB(0,   200,   0),    // FOREST  – green  (Wood)
+    CRGB(255, 255,   0),    // PASTURE – yellow (Wool)
+    CRGB(255, 165,   0),    // FIELD   – orange (Grain)
+    CRGB(255,   0,   0),    // HILL    – red    (Brick)
+    CRGB(128,   0, 128),    // MOUNTAIN– purple (Ore)
+    CRGB(255, 255, 255),    // DESERT  – white
+};
+static constexpr uint8_t kDemoColorCount =
+    (uint8_t)(sizeof(kDemoColors) / sizeof(kDemoColors[0]));
+
+static void runDemoFrame() {
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        led::setTileColor(t, kDemoColors[core::rng::uniform(kDemoColorCount)]);
+    }
+    led::show();
+}
 
 static CRGB portColor(PortType pt) {
     switch (pt) {
@@ -72,8 +80,6 @@ static CRGB portColor(PortType pt) {
 }
 
 // Map internal Biome (board_types.h) → packed biome code in BoardState.
-// Must match the mobile app / player-station decoder (see catan_wire.h docs).
-//   0 = DESERT, 1 = FOREST, 2 = PASTURE, 3 = FIELD, 4 = HILL, 5 = MOUNTAIN
 static uint8_t biomeCode(Biome b) {
     switch (b) {
         case Biome::FOREST:   return 1;
@@ -85,7 +91,6 @@ static uint8_t biomeCode(Biome b) {
     }
 }
 
-// Map GamePhase (class enum) → catan_GamePhase.
 static catan_GamePhase phaseToProto(GamePhase p) {
     switch (p) {
         case GamePhase::LOBBY:             return catan_GamePhase_PHASE_LOBBY;
@@ -99,8 +104,249 @@ static catan_GamePhase phaseToProto(GamePhase p) {
     return catan_GamePhase_PHASE_LOBBY;
 }
 
+// Translate nanopb PlayerAction enum → core::ActionKind.
+// Values are defined identically (0..9) but we cast explicitly so a future
+// divergence is caught.
+static core::ActionKind toActionKind(catan_PlayerAction a) {
+    switch (a) {
+        case catan_PlayerAction_ACTION_READY:        return core::ActionKind::READY;
+        case catan_PlayerAction_ACTION_START_GAME:   return core::ActionKind::START_GAME;
+        case catan_PlayerAction_ACTION_NEXT_NUMBER:  return core::ActionKind::NEXT_NUMBER;
+        case catan_PlayerAction_ACTION_PLACE_DONE:   return core::ActionKind::PLACE_DONE;
+        case catan_PlayerAction_ACTION_ROLL_DICE:    return core::ActionKind::ROLL_DICE;
+        case catan_PlayerAction_ACTION_END_TURN:     return core::ActionKind::END_TURN;
+        case catan_PlayerAction_ACTION_SKIP_ROBBER:  return core::ActionKind::SKIP_ROBBER;
+        case catan_PlayerAction_ACTION_REPORT:       return core::ActionKind::REPORT;
+        case catan_PlayerAction_ACTION_REQUEST_SYNC: return core::ActionKind::REQUEST_SYNC;
+        default:                                     return core::ActionKind::NONE;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Effect → hardware side-effects
+// ---------------------------------------------------------------------------
+
+static const char* rejectReasonName(core::RejectReason r) {
+    switch (r) {
+        case core::RejectReason::OUT_OF_TURN:              return "OUT_OF_TURN";
+        case core::RejectReason::WRONG_PHASE:              return "WRONG_PHASE";
+        case core::RejectReason::VERTEX_OCCUPIED:          return "VERTEX_OCCUPIED";
+        case core::RejectReason::TOO_CLOSE_TO_SETTLEMENT:  return "TOO_CLOSE";
+        case core::RejectReason::ROAD_OCCUPIED:            return "ROAD_OCCUPIED";
+        case core::RejectReason::ROAD_NOT_CONNECTED:       return "NOT_CONNECTED";
+        case core::RejectReason::NOT_MY_SETTLEMENT:        return "NOT_MY_SETTLEMENT";
+        case core::RejectReason::ROBBER_SAME_TILE:         return "ROBBER_SAME";
+        case core::RejectReason::INVALID_INDEX:            return "INVALID_INDEX";
+        default:                                           return "NONE";
+    }
+}
+
+static void applyEffect(const core::Effect& ef) {
+    using core::EffectKind;
+    switch (ef.kind) {
+        case EffectKind::PHASE_ENTERED: {
+            GamePhase p = (GamePhase)ef.a;
+            LOGI("FSM", "phase -> %s", game::phaseName(p));
+            if (p == GamePhase::PLAYING) {
+                led::colorAllTilesByBiome();
+                if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
+                led::show();
+            }
+            break;
+        }
+        case EffectKind::LOBBY_MASK_CHANGED: {
+            uint8_t mask = ef.a;
+            led::setAllTiles(CRGB(20, 20, 40));
+            for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+                if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
+            }
+            led::show();
+            LOGI("LOBBY", "connected mask=0x%02X (%u players)",
+                 (unsigned)mask, (unsigned)game::numPlayers());
+            break;
+        }
+        case EffectKind::BOARD_RANDOMIZED: {
+            LOGI("SETUP", "board randomized");
+            led::colorAllTilesByBiome();
+            for (uint8_t p = 0; p < PORT_COUNT; ++p) {
+                led::setPortColor(p, portColor(PORT_TOPO[p].type));
+            }
+            led::show();
+            for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+                LOGI("TILE", "%2u %-8s #%u", (unsigned)t,
+                     biomeName(g_tile_state[t].biome),
+                     (unsigned)g_tile_state[t].number);
+            }
+            break;
+        }
+        case EffectKind::REVEAL_NUMBER_CHANGED: {
+            uint8_t num = ef.a;
+            if (num == 0) {
+                led::colorAllTilesByBiome();
+                if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
+            } else {
+                led::setAllTiles(CRGB::Black);
+                for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+                    if (g_tile_state[t].number == num) led::setTileColor(t, CRGB::White);
+                }
+                LOGI("REVEAL", "number=%u", (unsigned)num);
+            }
+            led::show();
+            break;
+        }
+        case EffectKind::PLACED_SETTLEMENT: {
+            uint8_t p = ef.a, v = ef.b;
+            LOGI("PLACE", "P%u settlement v%u", (unsigned)(p + 1), (unsigned)v);
+            uint8_t adj[3];
+            uint8_t cnt = tilesForVertex(v, adj, 3);
+            if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[p % MAX_PLAYERS], 2, 150);
+            break;
+        }
+        case EffectKind::PLACED_CITY: {
+            uint8_t p = ef.a, v = ef.b;
+            LOGI("PLACE", "P%u city v%u", (unsigned)(p + 1), (unsigned)v);
+            uint8_t adj[3];
+            uint8_t cnt = tilesForVertex(v, adj, 3);
+            if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[p % MAX_PLAYERS], 3, 150);
+            break;
+        }
+        case EffectKind::PLACED_ROAD: {
+            uint8_t p = ef.a, e = ef.b;
+            LOGI("PLACE", "P%u road e%u", (unsigned)(p + 1), (unsigned)e);
+            break;
+        }
+        case EffectKind::PLACEMENT_REJECTED: {
+            LOGW("REJECT", "P%u reason=%s", (unsigned)(ef.a + 1),
+                 rejectReasonName((core::RejectReason)ef.b));
+            break;
+        }
+        case EffectKind::DICE_ROLLED: {
+            uint8_t d1 = ef.a, d2 = ef.b;
+            uint8_t total = (uint8_t)(d1 + d2);
+            LOGI("DICE", "P%u rolled %u+%u=%u%s",
+                 (unsigned)(game::currentPlayer() + 1),
+                 (unsigned)d1, (unsigned)d2, (unsigned)total,
+                 ef.c ? " -> ROBBER" : "");
+            uint8_t matching[TILE_COUNT];
+            uint8_t match_count = 0;
+            for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+                if (g_tile_state[t].number == total && t != game::robberTile()) {
+                    matching[match_count++] = t;
+                }
+            }
+            if (match_count > 0)
+                led::flashTiles(matching, match_count, CRGB::White, 3, 200);
+            break;
+        }
+        case EffectKind::TURN_ADVANCED:
+            LOGI("TURN", "-> P%u", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::ROBBER_MOVED: {
+            uint8_t new_t = ef.a, old_t = ef.b;
+            if (old_t < TILE_COUNT) led::undimTile(old_t);
+            if (new_t < TILE_COUNT) led::dimTile(new_t);
+            led::show();
+            LOGI("ROBBER", "tile %u -> %u", (unsigned)old_t, (unsigned)new_t);
+            break;
+        }
+        case EffectKind::WINNER: {
+            uint8_t w = ef.a;
+            LOGI("WINNER", "P%u reached %u VP", (unsigned)(w + 1), (unsigned)VP_TO_WIN);
+            for (uint8_t i = 0; i < 5; ++i) {
+                led::setAllTiles(kPlayerColors[w % MAX_PLAYERS]);
+                led::show();
+                delay(300);
+                led::setAllTiles(CRGB::Black);
+                led::show();
+                delay(300);
+            }
+            led::colorAllTilesByBiome();
+            led::show();
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sensor pump — translates debounced presence changes into StateMachine events
+// ---------------------------------------------------------------------------
+static void pumpSensors() {
+    for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+        if (sensor::vertexChanged(v) && sensor::vertexPresent(v)) {
+            sm.onVertexPresent(v);
+        }
+    }
+    for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
+        if (sensor::edgeChanged(e) && sensor::edgePresent(e)) {
+            sm.onEdgePresent(e);
+        }
+    }
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        if (sensor::tileChanged(t) && sensor::tilePresent(t)) {
+            sm.onTilePresent(t);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Player input pump — decode incoming PlayerInputs and forward to FSM
+// ---------------------------------------------------------------------------
+static void pumpPlayerInputs() {
+    for (uint8_t i = 0; i < 4; ++i) {
+        catan_PlayerInput in = catan_PlayerInput_init_zero;
+        uint32_t sender = 0;
+        if (!comm::pollPlayerInput(in, sender)) return;
+        if (in.player_id >= MAX_PLAYERS) {
+            LOGW("INPUT", "drop bad player_id=%u from sender=%lu",
+                 (unsigned)in.player_id, (unsigned long)sender);
+            continue;
+        }
+        LOGI("INPUT", "P%u action=%u vp=%u (sender=%lu)",
+             (unsigned)(in.player_id + 1), (unsigned)in.action,
+             (unsigned)in.vp, (unsigned long)sender);
+        sm.handlePlayerAction(in.player_id, toActionKind(in.action), (uint8_t)in.vp);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BoardState broadcast
+// ---------------------------------------------------------------------------
+static void broadcastBoardState() {
+    catan_BoardState s = catan_BoardState_init_zero;
+    s.phase          = phaseToProto(game::phase());
+    s.num_players    = game::numPlayers();
+    s.current_player = game::currentPlayer();
+    s.setup_round    = game::setupRound();
+    s.has_rolled     = game::hasRolled();
+    s.die1           = game::lastDie1();
+    s.die2           = game::lastDie2();
+    s.reveal_number  = (game::phase() == GamePhase::NUMBER_REVEAL)
+                           ? game::currentRevealNumber() : 0;
+    s.robber_tile    = (game::robberTile() < TILE_COUNT) ? game::robberTile() : 0xFF;
+    s.connected_mask = game::connectedMask();
+
+    uint8_t w = game::checkWinner();
+    s.winner_id = (w == NO_PLAYER) ? 0xFF : w;
+
+    s.tiles_packed.size = TILE_COUNT;
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        uint8_t biome_c = biomeCode(g_tile_state[t].biome);
+        uint8_t number  = g_tile_state[t].number & 0x0F;
+        s.tiles_packed.bytes[t] = (uint8_t)((biome_c << 4) | number);
+    }
+
+    s.vp_count = game::numPlayers();
+    for (uint8_t p = 0; p < s.vp_count && p < 4; ++p) {
+        s.vp[p] = game::reportedVp(p);
+    }
+
+    comm::sendBoardState(s);
+}
+
 // =============================================================================
-// setup()
+// setup() / loop()
 // =============================================================================
 
 void setup() {
@@ -114,478 +360,115 @@ void setup() {
     Serial.println(CATAN_PROTO_VERSION);
     Serial.println(F("======================================"));
 
-    Wire.begin();                  // I2C master (bridge + expanders)
+    LOGI("BOOT", "Wire.begin() @100kHz");
+    Serial.flush();
+    Wire.begin();
     Wire.setClock(100000);
+    // AVR Wire has no default timeout: a missing/broken I2C bus or a dead
+    // expander will hang requestFrom/endTransmission forever. Give it a
+    // 25ms ceiling so boot can always progress.
+    Wire.setWireTimeout(25000UL, /*reset_on_timeout=*/true);
 
+    LOGI("BOOT", "led::init");
+    Serial.flush();
     led::init();
+
+    LOGI("BOOT", "sensor::init (probe %u expanders)", (unsigned)EXPANDER_COUNT);
+    Serial.flush();
+    {
+        uint8_t found = 0;
+        for (uint8_t i = 0; i < EXPANDER_COUNT; ++i) {
+            Wire.beginTransmission(EXPANDER_ADDRS[i]);
+            uint8_t rc = Wire.endTransmission();
+            if (rc == 0) {
+                LOGI("I2C", "  expander 0x%02X OK", (unsigned)EXPANDER_ADDRS[i]);
+                found++;
+            } else {
+                LOGW("I2C", "  expander 0x%02X missing (rc=%u)",
+                     (unsigned)EXPANDER_ADDRS[i], (unsigned)rc);
+            }
+            Serial.flush();
+        }
+        LOGI("I2C", "probe done: %u/%u expanders present",
+             (unsigned)found, (unsigned)EXPANDER_COUNT);
+    }
     sensor::init();
-    dice::init(analogRead(A0));
+
+    uint16_t dice_seed = (uint16_t)analogRead(A0);
+    LOGI("BOOT", "dice::init seed=%u", (unsigned)dice_seed);
+    Serial.flush();
+    dice::init(dice_seed);
+
+    LOGI("BOOT", "comm::init (bridge UART)");
+    Serial.flush();
     comm::init();
+
+    LOGI("BOOT", "game::init");
+    Serial.flush();
     game::init();
+    sm.reset();
 
     led::setAllTiles(CRGB(20, 20, 40));
     led::show();
 
     game::setPhase(GamePhase::LOBBY);
-    Serial.println(F("[BOOT] Entering LOBBY"));
+    LOGI("BOOT", "ready, entering LOBBY (broadcast every %lums)",
+         (unsigned long)STATE_BROADCAST_MS);
+
+    if (DEMO_MODE) {
+        runDemoFrame();
+        LOGI("DEMO", "demo mode ON — cycling tiles every %lums", (unsigned long)DEMO_CYCLE_MS);
+    }
 }
 
-// =============================================================================
-// loop()
-// =============================================================================
+static void logHeartbeat() {
+    const comm::Stats& s = comm::stats();
+    LOGI("HB", "phase=%s loops=%lu bs_tx=%lu tx_bytes=%lu rx_bytes=%lu rx_ok=%lu rx_bad=%lu rx_dup=%lu",
+         game::phaseName(game::phase()),
+         (unsigned long)loop_count,
+         (unsigned long)s.tx_boardstate,
+         (unsigned long)s.tx_bytes,
+         (unsigned long)s.rx_bytes,
+         (unsigned long)s.rx_frames_ok,
+         (unsigned long)s.rx_frames_bad,
+         (unsigned long)s.rx_dups);
+}
 
 void loop() {
-    sensor::poll();
+    loop_count++;
 
-    // Poll bridge for player input
+    if (DEMO_MODE) {
+        if (millis() - last_demo_ms >= DEMO_CYCLE_MS) {
+            last_demo_ms = millis();
+            runDemoFrame();
+        }
+        delay(SENSOR_POLL_MS);
+        return;
+    }
+
+    sensor::poll();
+    pumpSensors();
+
     if (millis() - last_input_poll_ms >= INPUT_POLL_MS) {
         last_input_poll_ms = millis();
-        consumePlayerInputs();
+        pumpPlayerInputs();
     }
 
-    switch (game::phase()) {
-        case GamePhase::LOBBY:             handleLobby();            break;
-        case GamePhase::BOARD_SETUP:       handleBoardSetup();       break;
-        case GamePhase::NUMBER_REVEAL:     handleNumberReveal();     break;
-        case GamePhase::INITIAL_PLACEMENT: handleInitialPlacement(); break;
-        case GamePhase::PLAYING:           handlePlaying();          break;
-        case GamePhase::ROBBER:            handleRobber();           break;
-        case GamePhase::GAME_OVER:         handleGameOver();         break;
-    }
+    sm.tick(millis());
 
-    // Periodic broadcast to bridge → players → mobile
+    // Drain all pending effects before the next iteration.
+    core::Effect ef;
+    while (sm.pollEffect(ef)) applyEffect(ef);
+
     if (millis() - last_broadcast_ms >= STATE_BROADCAST_MS) {
         last_broadcast_ms = millis();
         broadcastBoardState();
     }
 
+    if (millis() - last_heartbeat_ms >= HEARTBEAT_MS) {
+        last_heartbeat_ms = millis();
+        logHeartbeat();
+    }
+
     delay(SENSOR_POLL_MS);
-}
-
-// =============================================================================
-// consumePlayerInputs() — drain all pending PlayerInput frames from bridge
-// =============================================================================
-
-static void consumePlayerInputs() {
-    // Drain up to 4 frames per poll so we don't starve the game loop.
-    for (uint8_t i = 0; i < 4; ++i) {
-        catan_PlayerInput in = catan_PlayerInput_init_zero;
-        if (!comm::pollPlayerInput(in)) return;  // no more pending
-
-        if (in.player_id >= MAX_PLAYERS) continue;
-
-        Serial.print(F("[INPUT] P"));
-        Serial.print(in.player_id + 1);
-        Serial.print(F(" action="));
-        Serial.println((uint8_t)in.action);
-
-        // Mark the sender as connected
-        if (!game::playerConnected(in.player_id)) {
-            game::setPlayerConnected(in.player_id, true);
-            // Bump num_players if a new slot is now occupied
-            uint8_t new_n = 0;
-            for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
-                if (game::playerConnected(p)) new_n = p + 1;
-            }
-            if (new_n > game::numPlayers()) game::setNumPlayers(new_n);
-            Serial.print(F("[CONNECT] P"));
-            Serial.print(in.player_id + 1);
-            Serial.print(F(" online (total "));
-            Serial.print(game::numPlayers());
-            Serial.println(F(")"));
-        }
-
-        // ACTION_REPORT: record self-reported VP
-        if (in.action == catan_PlayerAction_ACTION_REPORT) {
-            game::setReportedVp(in.player_id, (uint8_t)in.vp);
-        }
-
-        // Global actions (any player can trigger)
-        if (in.action == catan_PlayerAction_ACTION_START_GAME)
-            pending_start_game = true;
-        if (in.action == catan_PlayerAction_ACTION_NEXT_NUMBER)
-            pending_next_number = true;
-
-        // Per-current-player actions: capture last one
-        if (in.player_id == game::currentPlayer()) {
-            if (in.action != catan_PlayerAction_ACTION_NONE &&
-                in.action != catan_PlayerAction_ACTION_READY &&
-                in.action != catan_PlayerAction_ACTION_REPORT) {
-                pending_current_action = in.action;
-            }
-        }
-    }
-}
-
-// =============================================================================
-// broadcastBoardState() — encode + send current state to bridge
-// =============================================================================
-
-static void broadcastBoardState() {
-    catan_BoardState s = catan_BoardState_init_zero;
-    s.proto_version   = CATAN_PROTO_VERSION;
-    s.phase           = phaseToProto(game::phase());
-    s.num_players     = game::numPlayers();
-    s.current_player  = game::currentPlayer();
-    s.setup_round     = game::setupRound();
-    s.has_rolled      = game::hasRolled();
-    s.die1            = game::lastDie1();
-    s.die2            = game::lastDie2();
-    s.reveal_number   = (game::phase() == GamePhase::NUMBER_REVEAL)
-                          ? game::currentRevealNumber() : 0;
-    s.robber_tile     = (game::robberTile() < TILE_COUNT) ? game::robberTile() : 0xFF;
-    s.connected_mask  = game::connectedMask();
-
-    uint8_t w = game::checkWinner();
-    s.winner_id = (w == NO_PLAYER) ? 0xFF : w;
-
-    // Pack tiles into bytes: high nibble = biome, low nibble = number
-    s.tiles_packed.size = TILE_COUNT;
-    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        uint8_t biome_code = biomeCode(g_tile_state[t].biome);
-        uint8_t number     = g_tile_state[t].number & 0x0F;
-        s.tiles_packed.bytes[t] = (uint8_t)((biome_code << 4) | number);
-    }
-
-    // VP array for connected players
-    s.vp_count = game::numPlayers();
-    for (uint8_t p = 0; p < s.vp_count && p < 4; ++p) {
-        s.vp[p] = game::reportedVp(p);
-    }
-
-    comm::sendBoardState(s);
-}
-
-// =============================================================================
-// Phase: LOBBY
-// =============================================================================
-
-static void handleLobby() {
-    // Show player slots on the board with their colors
-    static uint8_t last_mask = 0xFF;
-    uint8_t mask = game::connectedMask();
-    if (mask != last_mask) {
-        last_mask = mask;
-        led::setAllTiles(CRGB(20, 20, 40));
-        for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-            if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
-        }
-        led::show();
-        Serial.print(F("[LOBBY] connected mask=0x"));
-        Serial.println(mask, HEX);
-    }
-
-    if (pending_start_game && game::numPlayers() >= MIN_PLAYERS) {
-        pending_start_game = false;
-
-        // Pick a random starting player from the currently connected set.
-        uint8_t ids[MAX_PLAYERS];
-        uint8_t cnt = 0;
-        for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-            if (game::playerConnected(i)) ids[cnt++] = i;
-        }
-        s_first_player = (cnt > 0) ? ids[random(cnt)] : 0;
-
-        Serial.print(F("[LOBBY] Starting with "));
-        Serial.print(game::numPlayers());
-        Serial.print(F(" players, first=P"));
-        Serial.println(s_first_player + 1);
-        board_setup_done = false;
-        game::setPhase(GamePhase::BOARD_SETUP);
-    }
-}
-
-// =============================================================================
-// Phase: BOARD_SETUP
-// =============================================================================
-
-static void handleBoardSetup() {
-    // Run tile/LED initialisation only once when we first enter this phase.
-    if (!board_setup_done) {
-        board_setup_done = true;
-        Serial.println(F("[SETUP] Randomizing board..."));
-        randomizeBoardLayout();
-
-        for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-            if (g_tile_state[t].biome == Biome::DESERT) {
-                game::setRobberTile(t);
-                break;
-            }
-        }
-
-        led::colorAllTilesByBiome();
-        for (uint8_t p = 0; p < PORT_COUNT; ++p) {
-            led::setPortColor(p, portColor(PORT_TOPO[p].type));
-        }
-        led::show();
-
-        for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-            Serial.print(F("[TILE] "));
-            Serial.print(t);
-            Serial.print(F(" "));
-            Serial.print(biomeName(g_tile_state[t].biome));
-            if (g_tile_state[t].number > 0) {
-                Serial.print(F(" #"));
-                Serial.print(g_tile_state[t].number);
-            }
-            Serial.println();
-        }
-
-        Serial.println(F("[SETUP] Board ready — waiting for player to start reveal."));
-    }
-
-    // Wait for any player to send NEXT_NUMBER before entering number reveal.
-    if (pending_next_number) {
-        pending_next_number = false;
-        game::resetReveal();
-        game::setPhase(GamePhase::NUMBER_REVEAL);
-        Serial.println(F("[SETUP] → NUMBER_REVEAL"));
-    }
-}
-
-// =============================================================================
-// Phase: NUMBER_REVEAL
-// =============================================================================
-
-static void handleNumberReveal() {
-    static uint8_t last_shown = 0;
-    uint8_t num = game::currentRevealNumber();
-    if (num != last_shown) {
-        last_shown = num;
-        led::setAllTiles(CRGB::Black);
-        for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-            if (g_tile_state[t].number == num) led::setTileColor(t, CRGB::White);
-        }
-        led::show();
-        Serial.print(F("[REVEAL] "));
-        Serial.println(num);
-    }
-
-    if (pending_next_number) {
-        pending_next_number = false;
-        if (!game::advanceReveal()) {
-            last_shown = 0;
-            led::colorAllTilesByBiome();
-            if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
-            led::show();
-
-            // Start snake draft with the randomly chosen first player.
-            game::resetSetupRound(s_first_player);
-            game::setPhase(GamePhase::INITIAL_PLACEMENT);
-            Serial.print(F("[REVEAL] → INITIAL_PLACEMENT, P"));
-            Serial.print(s_first_player + 1);
-            Serial.println(F(" goes first"));
-        }
-    }
-}
-
-// =============================================================================
-// Phase: INITIAL_PLACEMENT
-// =============================================================================
-
-static void handleInitialPlacement() {
-    uint8_t cp = game::currentPlayer();
-
-    // Sensor-driven piece placement
-    for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
-        if (!sensor::vertexChanged(v) || !sensor::vertexPresent(v)) continue;
-        if (game::vertexState(v).owner == NO_PLAYER) {
-            game::placeSettlement(v, cp);
-            Serial.print(F("[PLACE] P"));
-            Serial.print(cp + 1);
-            Serial.print(F(" settlement v"));
-            Serial.println(v);
-            uint8_t adj[3];
-            uint8_t cnt = tilesForVertex(v, adj, 3);
-            if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[cp], 2, 150);
-        }
-    }
-    for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
-        if (!sensor::edgeChanged(e) || !sensor::edgePresent(e)) continue;
-        if (game::edgeState(e).owner == NO_PLAYER) {
-            game::placeRoad(e, cp);
-            Serial.print(F("[PLACE] P"));
-            Serial.print(cp + 1);
-            Serial.print(F(" road e"));
-            Serial.println(e);
-        }
-    }
-
-    if (pending_current_action == catan_PlayerAction_ACTION_PLACE_DONE) {
-        pending_current_action = catan_PlayerAction_ACTION_NONE;
-        Serial.print(F("[SETUP] P"));
-        Serial.print(cp + 1);
-        Serial.print(F(" done (turn "));
-        Serial.print(game::setupTurn());
-        Serial.println(F(")"));
-
-        if (!game::advanceSetupTurn()) {
-            // All 2*N setup turns complete — start play from the first player.
-            game::setCurrentPlayer(s_first_player);
-            game::clearDice();
-            game::setPhase(GamePhase::PLAYING);
-            Serial.print(F("[SETUP] → PLAYING, P"));
-            Serial.print(s_first_player + 1);
-            Serial.println(F(" goes first"));
-        } else {
-            Serial.print(F("[SETUP] → P"));
-            Serial.print(game::currentPlayer() + 1);
-            Serial.print(F(" round "));
-            Serial.println(game::setupRound());
-        }
-    }
-}
-
-// =============================================================================
-// Phase: PLAYING
-// =============================================================================
-
-static void handlePlaying() {
-    uint8_t cp = game::currentPlayer();
-
-    // Roll
-    if (pending_current_action == catan_PlayerAction_ACTION_ROLL_DICE &&
-        !game::hasRolled()) {
-        pending_current_action = catan_PlayerAction_ACTION_NONE;
-        game::rollDice();
-        uint8_t d1 = game::lastDie1();
-        uint8_t d2 = game::lastDie2();
-        uint8_t total = game::lastDiceTotal();
-
-        Serial.print(F("[DICE] P"));
-        Serial.print(cp + 1);
-        Serial.print(F(": "));
-        Serial.print(d1);
-        Serial.print(F("+"));
-        Serial.print(d2);
-        Serial.print(F("="));
-        Serial.println(total);
-
-        uint8_t matching[TILE_COUNT];
-        uint8_t match_count = 0;
-        for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-            if (g_tile_state[t].number == total && t != game::robberTile()) {
-                matching[match_count++] = t;
-            }
-        }
-        if (match_count > 0)
-            led::flashTiles(matching, match_count, CRGB::White, 3, 200);
-
-        if (total == ROBBER_ROLL) {
-            Serial.println(F("[DICE] Seven rolled!"));
-            game::setPhase(GamePhase::ROBBER);
-            return;
-        }
-    }
-
-    // End turn
-    if (pending_current_action == catan_PlayerAction_ACTION_END_TURN &&
-        game::hasRolled()) {
-        pending_current_action = catan_PlayerAction_ACTION_NONE;
-        Serial.print(F("[TURN] P"));
-        Serial.print(cp + 1);
-        Serial.println(F(" ends turn"));
-        game::nextTurn();
-    }
-
-    // Piece building via sensors
-    for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
-        if (!sensor::vertexChanged(v) || !sensor::vertexPresent(v)) continue;
-        const VertexState& vs = game::vertexState(v);
-        if (vs.owner == NO_PLAYER) {
-            game::placeSettlement(v, cp);
-            Serial.print(F("[BUILD] P"));
-            Serial.print(cp + 1);
-            Serial.print(F(" settlement v"));
-            Serial.println(v);
-            uint8_t adj[3];
-            uint8_t cnt = tilesForVertex(v, adj, 3);
-            if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[cp], 2, 150);
-        } else if (vs.owner == cp && !vs.is_city) {
-            game::upgradeToCity(v);
-            Serial.print(F("[BUILD] P"));
-            Serial.print(cp + 1);
-            Serial.print(F(" city v"));
-            Serial.println(v);
-        }
-    }
-    for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
-        if (!sensor::edgeChanged(e) || !sensor::edgePresent(e)) continue;
-        if (game::edgeState(e).owner == NO_PLAYER) {
-            game::placeRoad(e, cp);
-            Serial.print(F("[BUILD] P"));
-            Serial.print(cp + 1);
-            Serial.print(F(" road e"));
-            Serial.println(e);
-        }
-    }
-
-    // Robber can be manually moved outside of 7-roll
-    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        if (!sensor::tileChanged(t) || !sensor::tilePresent(t)) continue;
-        if (t != game::robberTile()) {
-            uint8_t old = game::robberTile();
-            if (old < TILE_COUNT) led::undimTile(old);
-            game::setRobberTile(t);
-            led::dimTile(t);
-            led::show();
-            Serial.print(F("[ROBBER] Moved to tile "));
-            Serial.println(t);
-        }
-    }
-
-    // Winner check based on self-reported VP
-    if (game::checkWinner() != NO_PLAYER) {
-        game::setPhase(GamePhase::GAME_OVER);
-    }
-}
-
-// =============================================================================
-// Phase: ROBBER
-// =============================================================================
-
-static void handleRobber() {
-    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        if (!sensor::tileChanged(t) || !sensor::tilePresent(t)) continue;
-        if (t == game::robberTile()) continue;
-        uint8_t old = game::robberTile();
-        if (old < TILE_COUNT) led::undimTile(old);
-        game::setRobberTile(t);
-        led::dimTile(t);
-        led::show();
-        Serial.print(F("[ROBBER] Placed on tile "));
-        Serial.println(t);
-        game::setPhase(GamePhase::PLAYING);
-        return;
-    }
-
-    if (pending_current_action == catan_PlayerAction_ACTION_SKIP_ROBBER) {
-        pending_current_action = catan_PlayerAction_ACTION_NONE;
-        Serial.println(F("[ROBBER] Skipped"));
-        game::setPhase(GamePhase::PLAYING);
-    }
-}
-
-// =============================================================================
-// Phase: GAME_OVER
-// =============================================================================
-
-static void handleGameOver() {
-    static bool announced = false;
-    if (!announced) {
-        uint8_t winner = game::checkWinner();
-        Serial.print(F("[WINNER] P"));
-        Serial.println(winner + 1);
-        for (uint8_t i = 0; i < 5; ++i) {
-            led::setAllTiles(kPlayerColors[winner % MAX_PLAYERS]);
-            led::show();
-            delay(300);
-            led::setAllTiles(CRGB::Black);
-            led::show();
-            delay(300);
-        }
-        led::colorAllTilesByBiome();
-        led::show();
-        announced = true;
-    }
 }
