@@ -12,7 +12,7 @@
 // (firmware/board/src/main.cpp) is responsible for:
 //   - decoding sensor/LoRa traffic into Events,
 //   - translating emitted Effects into hardware side-effects,
-//   - broadcasting BoardState to the bridge.
+//   - broadcasting BoardState over I2C to the player stations.
 // =============================================================================
 
 #include <stdint.h>

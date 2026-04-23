@@ -59,6 +59,12 @@ uint8_t reportedVp(uint8_t player);
 void    setReportedVp(uint8_t player, uint8_t vp);
 uint8_t checkWinner();                // returns player id or NO_PLAYER
 
+// Lobby readiness — toggled by ACTION_READY in PHASE_LOBBY.
+bool    playerReady(uint8_t player);
+void    setPlayerReady(uint8_t player, bool ready);
+uint8_t readyMask();
+void    clearReady();
+
 // Ownership
 const VertexState& vertexState(uint8_t vertex_id);
 const EdgeState&   edgeState(uint8_t edge_id);

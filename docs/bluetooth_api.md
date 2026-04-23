@@ -1,196 +1,131 @@
-# Settlers of Catan — Bluetooth Low Energy API
+# Bluetooth API
 
-## Overview
+The ESP32-C6 hub firmware advertises a single GATT service that all phones
+connect to. Up to **4 simultaneous BLE centrals** are supported; each one is
+assigned a player slot (0..3) by the hub.
 
-Each ESP32-C6 player station exposes a BLE GATT server.  Mobile devices can connect to receive live game-state updates and send player commands with full parity to the physical buttons on the station.
-
----
-
-## Advertising
-
-| Field          | Value                                  |
-|----------------|----------------------------------------|
-| Device name    | `Catan-P1` … `Catan-P4`               |
-| AD flags       | LE General Discoverable, BR/EDR unsupported |
-| Advertised UUID| Catan Service (see below)              |
-| Interval       | 100–200 ms                             |
-
-The device name suffix corresponds to the player number (1-based).  Only one concurrent BLE connection is supported per station.
+* Device name: `Catan-Board`
+* Negotiated MTU: 247 (we never split a payload — keep messages ≤ 200 bytes)
+* Wire schema version: **6** (see [`proto/catan.proto`](../proto/catan.proto))
+* Encoding on BLE: **bare nanopb bytes** (no `[0xCA][len]` envelope; the hub
+  adds/strips the UART frame on its way to the Mega)
 
 ---
 
-## GATT Service
+## Service `CA7A0001-CA7A-4C4E-8000-00805F9B34FB`
 
-**Service UUID**: `CA7A0001-CA7A-4C4E-8000-00805F9B34FB`
+| Char UUID  | Name     | Properties        | Format                                           |
+|------------|----------|-------------------|--------------------------------------------------|
+| `CA7A0002` | State    | read, notify      | `BoardState` (nanopb)                            |
+| `CA7A0003` | Input    | write             | `PlayerInput` (nanopb)                           |
+| `CA7A0004` | Identity | write             | UTF-8 client_id (max 39 bytes + NUL)             |
+| `CA7A0005` | Slot     | read, notify      | 1 byte: assigned player_id (0..3) or 0xFF        |
 
-### Characteristics
+### Connection flow
 
-#### GameState  —  `CA7A0002-CA7A-4C4E-8000-00805F9B34FB`
-
-| Property   | Supported |
-|------------|-----------|
-| READ       | ✓         |
-| NOTIFY     | ✓         |
-| WRITE      | ✗         |
-
-**Payload**: NanoPB-encoded `BoardToPlayer` protobuf message (raw bytes, no framing).
-
-**Behaviour**:
-- **READ**: Returns the most recently received game state at any time.
-- **NOTIFY**: A notification is pushed to all subscribed centrals immediately after the board delivers a new `BoardToPlayer` message over I2C.  Enable notifications by writing `0x0001` to the CCCD (standard BLE procedure).
-
----
-
-#### Command  —  `CA7A0003-CA7A-4C4E-8000-00805F9B34FB`
-
-| Property       | Supported |
-|----------------|-----------|
-| READ           | ✗         |
-| WRITE          | ✓         |
-| WRITE NO RSP   | ✓         |
-
-**Payload**: NanoPB-encoded `PlayerToBoard` protobuf message (raw bytes, no framing).
-
-**Behaviour**: Writing this characteristic injects a command into the station, identical in effect to pressing a physical button.  The station processes the command and forwards it to the central board on the next I2C read cycle.
-
----
-
-## Protobuf Definitions
-
-All messages are defined in [`proto/catan.proto`](../proto/catan.proto) and compiled with [NanoPB](https://jpa.kapsi.fi/nanopb/) for embedded targets.
-
-### `BoardToPlayer` (GameState payload — station → mobile)
-
-| Field            | Type     | Description                                          |
-|------------------|----------|------------------------------------------------------|
-| `proto_version`  | uint32   | Schema version; currently **2**                      |
-| `type`           | MsgType  | Always `MSG_GAME_STATE` for state notifications      |
-| `phase`          | GamePhase| Current game phase (see enum below)                  |
-| `current_player` | uint32   | 0-based index of the player whose turn it is         |
-| `num_players`    | uint32   | Number of connected players                          |
-| `your_player_id` | uint32   | 0-based ID assigned to this station                  |
-| `die1`           | uint32   | Value of the first die (1–6)                         |
-| `die2`           | uint32   | Value of the second die (1–6)                        |
-| `dice_total`     | uint32   | Sum of both dice                                     |
-| `reveal_number`  | uint32   | Current number being revealed (NUMBER_REVEAL phase)  |
-| `line1`          | string   | Primary status text (max 22 chars)                   |
-| `line2`          | string   | Secondary status text (max 22 chars)                 |
-| `btn_left`       | string   | Label for the left action (max 8 chars)              |
-| `btn_center`     | string   | Label for the centre action (max 8 chars)            |
-| `btn_right`      | string   | Label for the right action (max 8 chars)             |
-| `vp0`–`vp3`      | uint32   | Victory points for player slots 0–3                  |
-| `res_lumber`     | uint32   | Lumber cards held by **this** player                 |
-| `res_wool`       | uint32   | Wool cards                                           |
-| `res_grain`      | uint32   | Grain cards                                          |
-| `res_brick`      | uint32   | Brick cards                                          |
-| `res_ore`        | uint32   | Ore cards                                            |
-| `winner_id`      | uint32   | Winner player ID; `0xFF` if no winner yet            |
-| `setup_round`    | uint32   | Setup round number (1 or 2)                          |
-| `has_rolled`     | bool     | True if the current player has already rolled        |
-
-### `PlayerToBoard` (Command payload — mobile → station)
-
-| Field    | Type         | Description                                                    |
-|----------|--------------|----------------------------------------------------------------|
-| `type`   | MsgType      | `MSG_BUTTON_EVENT` or `MSG_ACTION`                             |
-| `button` | ButtonId     | Raw button press (see enum).  Use when mapping directly.       |
-| `action` | PlayerAction | Semantic action (see enum).  **Preferred for mobile clients.** |
-
-> When `action` is non-zero the station maps it to the appropriate `ButtonId` before forwarding to the board, so the board firmware requires no changes.
-
----
-
-## Enums
-
-### `GamePhase`
-
-| Value | Name                      | Description                              |
-|-------|---------------------------|------------------------------------------|
-| 0     | `PHASE_WAITING_FOR_PLAYERS` | Lobby — waiting for players to connect |
-| 1     | `PHASE_BOARD_SETUP`         | Board tiles being randomised           |
-| 2     | `PHASE_NUMBER_REVEAL`       | Revealing number tokens one by one     |
-| 3     | `PHASE_INITIAL_PLACEMENT`   | Players place starting settlements     |
-| 4     | `PHASE_PLAYING`             | Main game loop                         |
-| 5     | `PHASE_ROBBER`              | Current player must move the robber    |
-| 6     | `PHASE_TRADE`               | Active player is trading               |
-| 7     | `PHASE_GAME_OVER`           | Game ended                             |
-
-### `ButtonId`
-
-| Value | Name         |
-|-------|--------------|
-| 0     | `BTN_NONE`   |
-| 1     | `BTN_LEFT`   |
-| 2     | `BTN_CENTER` |
-| 3     | `BTN_RIGHT`  |
-
-### `PlayerAction` (semantic — preferred for BLE)
-
-| Value | Name                 | Phase context              | Equivalent button |
-|-------|----------------------|----------------------------|-------------------|
-| 0     | `ACTION_NONE`        | —                          | —                 |
-| 1     | `ACTION_BTN_LEFT`    | Any                        | `BTN_LEFT`        |
-| 2     | `ACTION_BTN_CENTER`  | Any                        | `BTN_CENTER`      |
-| 3     | `ACTION_BTN_RIGHT`   | Any                        | `BTN_RIGHT`       |
-| 4     | `ACTION_ROLL_DICE`   | `PHASE_PLAYING` (pre-roll) | `BTN_LEFT`        |
-| 5     | `ACTION_END_TURN`    | `PHASE_PLAYING` (post-roll)| `BTN_RIGHT`       |
-| 6     | `ACTION_TRADE`       | `PHASE_TRADE`              | `BTN_LEFT`        |
-| 7     | `ACTION_SKIP_ROBBER` | `PHASE_ROBBER`             | `BTN_CENTER`      |
-| 8     | `ACTION_PLACE_DONE`  | `PHASE_INITIAL_PLACEMENT`  | `BTN_CENTER`      |
-| 9     | `ACTION_START_GAME`  | `PHASE_WAITING_FOR_PLAYERS`| `BTN_LEFT`        |
-| 10    | `ACTION_NEXT_NUMBER` | `PHASE_NUMBER_REVEAL`      | `BTN_CENTER`      |
-
----
-
-## Wire Format
-
-| Transport | Format                          |
-|-----------|---------------------------------|
-| **BLE**   | Raw NanoPB bytes (no header)    |
-| **I2C**   | `[0xCA][payload_len][pb_bytes]` |
-
-BLE ATT packets carry their own length so no additional framing is needed.  The I2C path uses the `0xCA` magic byte + 1-byte length prefix to allow robust frame validation on the slave side.
-
----
-
-## Connecting: Step-by-Step (mobile)
-
-1. Scan for devices advertising service UUID `CA7A0001-CA7A-4C4E-8000-00805F9B34FB` or named `Catan-P*`.
-2. Connect to the desired station.
-3. Discover the Catan service and its characteristics.
-4. Write `0x0001` to the CCCD of the **GameState** characteristic to enable notifications.
-5. Optionally READ the **GameState** characteristic to get the current state immediately.
-6. Process incoming **GameState** notifications; decode using the `BoardToPlayer` protobuf schema.
-7. To perform a player action, encode a `PlayerToBoard` message with the desired `action` field and WRITE it to the **Command** characteristic.
-
-### Minimal command example (pseudo-code)
-
-```python
-# Encode ACTION_ROLL_DICE using the protobuf library of your choice
-cmd = PlayerToBoard()
-cmd.type   = MSG_ACTION
-cmd.action = ACTION_ROLL_DICE
-payload = cmd.SerializeToString()
-ble_client.write_characteristic(COMMAND_UUID, payload)
+```
+phone                                                 hub
+  │                                                    │
+  │ 1. connect (request MTU 247)                       │
+  │──────────────────────────────────────────────────▶ │
+  │                                                    │
+  │ 2. subscribe to State + Slot                       │
+  │──────────────────────────────────────────────────▶ │
+  │                                                    │
+  │ 3. write Identity (client_id)                      │
+  │──────────────────────────────────────────────────▶ │
+  │                                                    │  ← hub looks up
+  │                                                    │    or assigns slot,
+  │                                                    │    persists in NVS
+  │                                                    │
+  │ 4. notify Slot (player_id)                         │
+  │ ◀──────────────────────────────────────────────────│
+  │                                                    │
+  │ 5. notify State (cadence ~5 Hz)                    │
+  │ ◀──────────────────────────────────────────────────│
+  │                                                    │
+  │ 6. write Input as the player taps buttons          │
+  │ ──────────────────────────────────────────────────▶│
 ```
 
-### Minimal subscription example (pseudo-code)
-
-```python
-def on_notify(data: bytes):
-    state = BoardToPlayer()
-    state.ParseFromString(data)
-    print(f"Phase={state.phase}, Turn=P{state.current_player+1}, "
-          f"Dice={state.die1}+{state.die2}={state.dice_total}")
-
-ble_client.enable_notify(GAMESTATE_UUID, on_notify)
-```
+* The phone **must write Identity within 4 s** of connecting, or the hub
+  drops the connection. (BLE addresses can rotate due to privacy randomisation,
+  so the address alone cannot be trusted as identity.)
+* The Slot characteristic returns `0xFF` until an identity is bound.
+* Slot assignment is sticky: the hub stores `client_id → slot` in NVS
+  (namespace `catan`, keys `slot0`..`slot3`). When the same phone reconnects
+  (even after a power cycle on either side), the same slot is restored.
+* If all four slots are occupied with stale bindings, the hub recycles the
+  lowest disconnected slot for the new identity.
 
 ---
 
-## Architecture Notes
+## `BoardState` (hub → mobile, notify)
 
-- **One connection only**: The station supports one BLE central at a time.  After disconnect it automatically restarts advertising.
-- **State freshness**: Notifications are edge-triggered (sent on every I2C state message from the board, typically every 200 ms during active play).  A READ on the GameState characteristic returns the last known state even when no notification has been received.
-- **Command ordering**: BLE commands and physical button presses share the same pending-input slot.  A physical button press takes priority if both are pending simultaneously (extremely unlikely in practice).
-- **Proto version**: Clients should check `proto_version == 2` and warn on mismatch.  Unknown fields are safely ignored by NanoPB on both sides.
+Field tags (see `proto/catan.proto`):
+
+| Tag | Name              | Type         | Notes                                          |
+|-----|-------------------|--------------|------------------------------------------------|
+| 1   | `proto_version`   | uint32       | Always 6; reject if mismatched                 |
+| 2   | `phase`           | enum         | LOBBY / BOARD_SETUP / NUMBER_REVEAL / ...      |
+| 3   | `num_players`     | uint32       | Highest occupied slot index + 1                |
+| 4   | `current_player`  | uint32       | 0..3                                           |
+| 5   | `setup_round`     | uint32       | 0 or 1 during INITIAL_PLACEMENT                |
+| 6   | `has_rolled`      | bool         | Current player rolled this turn                |
+| 7   | `die1`, 8 `die2`  | uint32       | Last roll (0 if not rolled)                    |
+| 9   | `reveal_number`   | uint32       | 2..12 during NUMBER_REVEAL, else 0             |
+| 10  | `winner_id`       | uint32       | 0..3, or `0xFF` if no winner                   |
+| 11  | `robber_tile`     | uint32       | 0..18, or `0xFF`                               |
+| 12  | `connected_mask`  | uint32       | Bitmask of connected slots (bit i ↔ player i)  |
+| 13  | `tiles_packed`    | bytes (19)   | High nibble = biome, low nibble = number       |
+| 14  | `vp` (packed)     | repeated u32 | Self-reported VP per player                    |
+| 15  | `ready` (packed)  | repeated u32 | 1 if player has tapped Ready in lobby          |
+
+## `PlayerInput` (mobile → hub, write)
+
+| Tag | Name           | Type   | Notes                                                |
+|-----|----------------|--------|------------------------------------------------------|
+| 1   | `proto_version`| uint32 | Phone may set 6; hub re-stamps before forwarding     |
+| 2   | `player_id`    | uint32 | Phone may set 0; hub re-stamps to the bound slot     |
+| 3   | `action`       | enum   | `ACTION_*` (see below)                               |
+| 4   | `client_id`    | string | Optional echo; hub re-stamps from its slot table     |
+| 10  | `vp`           | uint32 | For `REPORT`; for `READY` may be 0/1 (toggle if 0)   |
+| 11  | `res_lumber`   | uint32 | for `REPORT` only                                    |
+| 12  | `res_wool`     | uint32 |                                                      |
+| 13  | `res_grain`    | uint32 |                                                      |
+| 14  | `res_brick`    | uint32 |                                                      |
+| 15  | `res_ore`      | uint32 |                                                      |
+
+The hub authoritatively rewrites `proto_version`, `player_id`, and
+`client_id` from its slot table before forwarding to the Mega — clients
+cannot impersonate another player.
+
+### `PlayerAction` values
+
+| Value | Name             | Notes                                              |
+|-------|------------------|----------------------------------------------------|
+| 0     | `NONE`           | Sentinel                                           |
+| 1     | `READY`          | Toggle "I'm ready" in lobby (`vp=0` ⇒ toggle)      |
+| 2     | `START_GAME`     | Lobby → board setup                                |
+| 3     | `NEXT_NUMBER`    | Step number-reveal display                         |
+| 4     | `PLACE_DONE`     | End my initial placement turn                      |
+| 5     | `ROLL_DICE`      | Current player rolls                               |
+| 6     | `END_TURN`       | Current player ends turn                           |
+| 7     | `SKIP_ROBBER`    | Robber phase: leave robber where it is             |
+| 8     | `REPORT`         | Send self-reported VP + resource counts            |
+
+---
+
+## Hub-internal: `PlayerPresence` (hub → Mega, UART only)
+
+The hub also pushes a `PlayerPresence` frame to the Mega whenever the
+connection mask changes (and as a 1 Hz keep-alive):
+
+| Tag | Name             | Type             | Notes                          |
+|-----|------------------|------------------|--------------------------------|
+| 1   | `proto_version`  | uint32           | 6                              |
+| 2   | `connected_mask` | uint32           | Bit i = slot i is connected    |
+| 3   | `client_ids`     | repeated string  | Up to 4 entries, may be empty  |
+
+This message is **not exposed over BLE** — phones learn about each other only
+via `BoardState.connected_mask` and `BoardState.ready`.

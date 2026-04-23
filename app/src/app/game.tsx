@@ -59,7 +59,7 @@ function buttonsForPhase(
 ): ButtonRow {
   switch (phase) {
     case GamePhase.LOBBY: {
-      const canStart = connectedCount >= 2;
+      const canStart = connectedCount >= 1;
       return [
         { label: 'Ready',      action: PlayerAction.READY,      enabled: true },
         { label: 'Start Game', action: PlayerAction.START_GAME, enabled: canStart, primary: canStart },

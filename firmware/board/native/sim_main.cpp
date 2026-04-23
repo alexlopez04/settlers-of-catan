@@ -92,15 +92,23 @@ static void resetScenario(StateMachine& sm, uint32_t seed = 1) {
     game::setPhase(GamePhase::LOBBY);
 }
 
+// Simulate the board's I2C poll: player i's phone is connected.
+// In the real firmware the main loop mirrors comm::connectedMask() into
+// game state every tick; here we just poke it directly.
+static void markConnected(uint8_t n) {
+    for (uint8_t p = 0; p < n; ++p) {
+        game::setPlayerConnected(p, true);
+    }
+    game::setNumPlayers(n);
+}
+
 // Walk the LOBBY → PLAYING sequence, returning the FSM primed to play.
 // - Connects `num` players (ids 0..num-1).
 // - Uses a deterministic seed so first_player_ is reproducible.
 static void bootToPlaying(StateMachine& sm, uint8_t num, uint32_t seed = 1) {
     resetScenario(sm, seed);
 
-    for (uint8_t p = 0; p < num; ++p) {
-        sm.handlePlayerAction(p, ActionKind::READY);
-    }
+    markConnected(num);
     sm.tick(0);
     drainEffects(sm);
 
@@ -155,9 +163,8 @@ static void test_lobby_to_setup() {
     StateMachine sm;
     resetScenario(sm);
 
-    // Connect two players → READY marks them connected.
-    sm.handlePlayerAction(0, ActionKind::READY);
-    sm.handlePlayerAction(1, ActionKind::READY);
+    // Connect two players (simulated I2C mask update).
+    markConnected(2);
     sm.tick(0);
     CHECK_EQ((int)game::numPlayers(), 2);
     CHECK(game::playerConnected(0));
@@ -183,7 +190,7 @@ static void test_full_number_reveal() {
     StateMachine sm;
     resetScenario(sm);
 
-    for (uint8_t p = 0; p < 3; ++p) sm.handlePlayerAction(p, ActionKind::READY);
+    markConnected(3);
     sm.tick(0);
     sm.handlePlayerAction(0, ActionKind::START_GAME);
     sm.tick(1);
@@ -286,8 +293,7 @@ static void test_robber_on_seven() {
     resetScenario(sm);
 
     // Shortcut: force the FSM into PLAYING with player 0 as current.
-    sm.handlePlayerAction(0, ActionKind::READY);
-    sm.handlePlayerAction(1, ActionKind::READY);
+    markConnected(2);
     sm.tick(0);
     drainEffects(sm);
     game::setPhase(GamePhase::PLAYING);
@@ -324,8 +330,7 @@ static void test_winner_triggers_game_over() {
     g_current_test = "winner_triggers_game_over";
     StateMachine sm;
     resetScenario(sm);
-    sm.handlePlayerAction(0, ActionKind::READY);
-    sm.handlePlayerAction(1, ActionKind::READY);
+    markConnected(2);
     sm.tick(0);
     drainEffects(sm);
 

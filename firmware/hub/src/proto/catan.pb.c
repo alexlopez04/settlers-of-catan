@@ -12,20 +12,7 @@ PB_BIND(catan_BoardState, catan_BoardState, AUTO)
 PB_BIND(catan_PlayerInput, catan_PlayerInput, AUTO)
 
 
-PB_BIND(catan_Ack, catan_Ack, AUTO)
-
-
-PB_BIND(catan_Nack, catan_Nack, AUTO)
-
-
-PB_BIND(catan_SyncRequest, catan_SyncRequest, AUTO)
-
-
-PB_BIND(catan_Envelope, catan_Envelope, AUTO)
-
-
-
-
+PB_BIND(catan_PlayerPresence, catan_PlayerPresence, AUTO)
 
 
 

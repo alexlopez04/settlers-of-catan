@@ -14,6 +14,7 @@ uint8_t      num_players      = 0;
 uint8_t      current_player_  = 0;
 
 bool         player_connected_[MAX_PLAYERS] = {};
+bool         player_ready_[MAX_PLAYERS]     = {};
 uint8_t      reported_vp_[MAX_PLAYERS]      = {};
 
 VertexState  vertices[VERTEX_COUNT];
@@ -54,6 +55,7 @@ void init() {
     setup_first_player_ = 0;
 
     memset(player_connected_, 0, sizeof(player_connected_));
+    memset(player_ready_,     0, sizeof(player_ready_));
     memset(reported_vp_,      0, sizeof(reported_vp_));
 
     for (uint8_t i = 0; i < VERTEX_COUNT; ++i) {
@@ -119,6 +121,22 @@ uint8_t checkWinner() {
         if (reported_vp_[p] >= VP_TO_WIN) return p;
     }
     return NO_PLAYER;
+}
+
+// ── Lobby readiness ─────────────────────────────────────────────────────────
+bool playerReady(uint8_t p) {
+    return (p < MAX_PLAYERS) ? player_ready_[p] : false;
+}
+void setPlayerReady(uint8_t p, bool r) {
+    if (p < MAX_PLAYERS) player_ready_[p] = r;
+}
+uint8_t readyMask() {
+    uint8_t m = 0;
+    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) if (player_ready_[i]) m |= (1u << i);
+    return m;
+}
+void clearReady() {
+    memset(player_ready_, 0, sizeof(player_ready_));
 }
 
 // ── Ownership ───────────────────────────────────────────────────────────────

@@ -62,7 +62,6 @@ export default function ScanScreen() {
   const renderDevice = useCallback(
     ({ item }: { item: ScannedDevice }) => {
       const isConnecting = connectingTo === item.id;
-      const playerNum = item.name.replace('Catan-P', 'Player ');
       const rssiStrength =
         item.rssi == null ? '' : item.rssi > -60 ? '●●●' : item.rssi > -80 ? '●●○' : '●○○';
 
@@ -79,8 +78,8 @@ export default function ScanScreen() {
             },
           ]}>
           <View style={styles.deviceInfo}>
-            <Text style={[styles.deviceName, { color: theme.text }]}>{playerNum}</Text>
-            <Text style={[styles.deviceId, { color: theme.textSecondary }]}>{item.name}</Text>
+            <Text style={[styles.deviceName, { color: theme.text }]}>{item.name}</Text>
+            <Text style={[styles.deviceId, { color: theme.textSecondary }]}>Catan board</Text>
           </View>
           <View style={styles.deviceRight}>
             {item.rssi != null && (
@@ -136,7 +135,7 @@ export default function ScanScreen() {
         <View style={styles.header}>
           <Text style={[styles.title, { color: theme.text }]}>Settlers of Catan</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-            Player Station Controller
+            Mobile Player Console
           </Text>
         </View>
 
@@ -149,12 +148,12 @@ export default function ScanScreen() {
               <View style={styles.scanningRow}>
                 <ActivityIndicator size="small" color={theme.primary} />
                 <Text style={[styles.scanningText, { color: theme.textSecondary }]}>
-                  Scanning for stations…
+                  Looking for the Catan board…
                 </Text>
               </View>
             ) : (
               <Text style={[styles.scanningText, { color: theme.textSecondary }]}>
-                {devices.length === 0 ? 'No stations found.' : `${devices.length} station${devices.length !== 1 ? 's' : ''} found`}
+                {devices.length === 0 ? 'No board found.' : 'Board ready'}
               </Text>
             )}
           </View>
@@ -170,7 +169,7 @@ export default function ScanScreen() {
           ListEmptyComponent={
             bleState === State.PoweredOn && !scanning ? (
               <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-                Make sure your station is powered on and nearby.
+                Make sure the Catan board is powered on and nearby.
               </Text>
             ) : null
           }

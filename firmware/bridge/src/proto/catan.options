@@ -1,4 +1,0 @@
-# NanoPB options — fixed-size fields for embedded targets.
-
-catan.BoardState.tiles_packed  max_size:19
-catan.BoardState.vp            max_count:4

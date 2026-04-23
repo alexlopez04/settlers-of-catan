@@ -1,4 +1,10 @@
 # NanoPB options — fixed-size fields for embedded targets.
 
-catan.BoardState.tiles_packed  max_size:19
-catan.BoardState.vp            max_count:4
+catan.BoardState.tiles_packed       max_size:19
+catan.BoardState.vp                 max_count:4
+catan.BoardState.ready              max_count:4
+
+catan.PlayerInput.client_id         max_size:40
+
+catan.PlayerPresence.client_ids     max_count:4
+catan.PlayerPresence.client_ids     max_size:40

@@ -1,32 +1,32 @@
 // =============================================================================
 // main.cpp — Settlers of Catan: Arduino Mega central board controller.
 //
-// This file is now a thin I/O shell:
-//   - It reads hall-effect sensors (debounced in sensor_manager) and feeds
-//     presence events into `core::StateMachine`.
-//   - It polls the bridge for `PlayerInput` envelopes and forwards them.
-//   - On every loop it drains `Effect`s from the StateMachine and applies
-//     them to the LED strip, serial log, and comm broadcasts.
+//   Mega  <--I2C(100k)-->  PCF8574 sensor expanders   (game presence input)
+//   Mega  <--Serial1-->    ESP32-C6 BLE hub           (player I/O)
 //
-// All game logic — phase transitions, placement validation, dice, turn
-// order, winner checks — lives in `firmware/board/src/core/` and is pure
-// (no Arduino, no hardware) so it can be compiled for the native host and
-// exercised by `firmware/board/native/sim_main.cpp`.
+// The Mega owns the game FSM, sensors, and LEDs. The hub owns BLE — it
+// reports who is connected (PlayerPresence) and forwards each phone's
+// PlayerInput. The Mega broadcasts BoardState to the hub on a fixed
+// 200 ms cadence; the hub fans those out to every connected mobile.
+//
+// All game logic — phases, placement, dice, turn order — lives in
+// firmware/board/src/core/ and is host-compilable for native simulation
+// (see firmware/board/native/sim_main.cpp).
 // =============================================================================
 
 #include <Arduino.h>
 #include <Wire.h>
 
 #include "config.h"
-#include "catan_wire.h"
 #include "catan_log.h"
+#include "catan_wire.h"
+#include "link.h"
 #include "board_types.h"
 #include "board_topology.h"
 #include "led_manager.h"
 #include "sensor_manager.h"
 #include "game_state.h"
 #include "dice.h"
-#include "comm_manager.h"
 #include "proto/catan.pb.h"
 #include "core/state_machine.h"
 #include "core/events.h"
@@ -37,7 +37,6 @@ static core::StateMachine sm;
 // ── Timing ──────────────────────────────────────────────────────────────────
 static constexpr uint32_t HEARTBEAT_MS = 5000;
 static uint32_t last_broadcast_ms  = 0;
-static uint32_t last_input_poll_ms = 0;
 static uint32_t last_heartbeat_ms  = 0;
 static uint32_t last_demo_ms       = 0;
 static uint32_t loop_count         = 0;
@@ -48,14 +47,9 @@ static const CRGB kPlayerColors[MAX_PLAYERS] = {
 };
 
 // ── Demo Mode ───────────────────────────────────────────────────────────────
-// One colour per resource type (matches led_manager biomeColor palette).
 static const CRGB kDemoColors[] = {
-    CRGB(0,   200,   0),    // FOREST  – green  (Wood)
-    CRGB(255, 255,   0),    // PASTURE – yellow (Wool)
-    CRGB(255, 165,   0),    // FIELD   – orange (Grain)
-    CRGB(255,   0,   0),    // HILL    – red    (Brick)
-    CRGB(128,   0, 128),    // MOUNTAIN– purple (Ore)
-    CRGB(255, 255, 255),    // DESERT  – white
+    CRGB(0,   200,   0), CRGB(255, 255, 0), CRGB(255, 165, 0),
+    CRGB(255, 0,     0), CRGB(128, 0, 128), CRGB(255, 255, 255),
 };
 static constexpr uint8_t kDemoColorCount =
     (uint8_t)(sizeof(kDemoColors) / sizeof(kDemoColors[0]));
@@ -79,7 +73,6 @@ static CRGB portColor(PortType pt) {
     }
 }
 
-// Map internal Biome (board_types.h) → packed biome code in BoardState.
 static uint8_t biomeCode(Biome b) {
     switch (b) {
         case Biome::FOREST:   return 1;
@@ -87,7 +80,7 @@ static uint8_t biomeCode(Biome b) {
         case Biome::FIELD:    return 3;
         case Biome::HILL:     return 4;
         case Biome::MOUNTAIN: return 5;
-        default:              return 0;  // DESERT
+        default:              return 0;
     }
 }
 
@@ -104,28 +97,23 @@ static catan_GamePhase phaseToProto(GamePhase p) {
     return catan_GamePhase_PHASE_LOBBY;
 }
 
-// Translate nanopb PlayerAction enum → core::ActionKind.
-// Values are defined identically (0..9) but we cast explicitly so a future
-// divergence is caught.
 static core::ActionKind toActionKind(catan_PlayerAction a) {
     switch (a) {
-        case catan_PlayerAction_ACTION_READY:        return core::ActionKind::READY;
-        case catan_PlayerAction_ACTION_START_GAME:   return core::ActionKind::START_GAME;
-        case catan_PlayerAction_ACTION_NEXT_NUMBER:  return core::ActionKind::NEXT_NUMBER;
-        case catan_PlayerAction_ACTION_PLACE_DONE:   return core::ActionKind::PLACE_DONE;
-        case catan_PlayerAction_ACTION_ROLL_DICE:    return core::ActionKind::ROLL_DICE;
-        case catan_PlayerAction_ACTION_END_TURN:     return core::ActionKind::END_TURN;
-        case catan_PlayerAction_ACTION_SKIP_ROBBER:  return core::ActionKind::SKIP_ROBBER;
-        case catan_PlayerAction_ACTION_REPORT:       return core::ActionKind::REPORT;
-        case catan_PlayerAction_ACTION_REQUEST_SYNC: return core::ActionKind::REQUEST_SYNC;
-        default:                                     return core::ActionKind::NONE;
+        case catan_PlayerAction_ACTION_READY:       return core::ActionKind::READY;
+        case catan_PlayerAction_ACTION_START_GAME:  return core::ActionKind::START_GAME;
+        case catan_PlayerAction_ACTION_NEXT_NUMBER: return core::ActionKind::NEXT_NUMBER;
+        case catan_PlayerAction_ACTION_PLACE_DONE:  return core::ActionKind::PLACE_DONE;
+        case catan_PlayerAction_ACTION_ROLL_DICE:   return core::ActionKind::ROLL_DICE;
+        case catan_PlayerAction_ACTION_END_TURN:    return core::ActionKind::END_TURN;
+        case catan_PlayerAction_ACTION_SKIP_ROBBER: return core::ActionKind::SKIP_ROBBER;
+        case catan_PlayerAction_ACTION_REPORT:      return core::ActionKind::REPORT;
+        default:                                    return core::ActionKind::NONE;
     }
 }
 
 // ---------------------------------------------------------------------------
 // Effect → hardware side-effects
 // ---------------------------------------------------------------------------
-
 static const char* rejectReasonName(core::RejectReason r) {
     switch (r) {
         case core::RejectReason::OUT_OF_TURN:              return "OUT_OF_TURN";
@@ -161,8 +149,9 @@ static void applyEffect(const core::Effect& ef) {
                 if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
             }
             led::show();
-            LOGI("LOBBY", "connected mask=0x%02X (%u players)",
-                 (unsigned)mask, (unsigned)game::numPlayers());
+            LOGI("LOBBY", "connected mask=0x%02X (%u players, ready=0x%02X)",
+                 (unsigned)mask, (unsigned)game::numPlayers(),
+                 (unsigned)game::readyMask());
             break;
         }
         case EffectKind::BOARD_RANDOMIZED: {
@@ -210,16 +199,13 @@ static void applyEffect(const core::Effect& ef) {
             if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[p % MAX_PLAYERS], 3, 150);
             break;
         }
-        case EffectKind::PLACED_ROAD: {
-            uint8_t p = ef.a, e = ef.b;
-            LOGI("PLACE", "P%u road e%u", (unsigned)(p + 1), (unsigned)e);
+        case EffectKind::PLACED_ROAD:
+            LOGI("PLACE", "P%u road e%u", (unsigned)(ef.a + 1), (unsigned)ef.b);
             break;
-        }
-        case EffectKind::PLACEMENT_REJECTED: {
+        case EffectKind::PLACEMENT_REJECTED:
             LOGW("REJECT", "P%u reason=%s", (unsigned)(ef.a + 1),
                  rejectReasonName((core::RejectReason)ef.b));
             break;
-        }
         case EffectKind::DICE_ROLLED: {
             uint8_t d1 = ef.a, d2 = ef.b;
             uint8_t total = (uint8_t)(d1 + d2);
@@ -274,47 +260,79 @@ static void applyEffect(const core::Effect& ef) {
 // ---------------------------------------------------------------------------
 static void pumpSensors() {
     for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
-        if (sensor::vertexChanged(v) && sensor::vertexPresent(v)) {
-            sm.onVertexPresent(v);
-        }
+        if (sensor::vertexChanged(v) && sensor::vertexPresent(v)) sm.onVertexPresent(v);
     }
     for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
-        if (sensor::edgeChanged(e) && sensor::edgePresent(e)) {
-            sm.onEdgePresent(e);
-        }
+        if (sensor::edgeChanged(e) && sensor::edgePresent(e)) sm.onEdgePresent(e);
     }
     for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        if (sensor::tileChanged(t) && sensor::tilePresent(t)) {
-            sm.onTilePresent(t);
-        }
+        if (sensor::tileChanged(t) && sensor::tilePresent(t)) sm.onTilePresent(t);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Player input pump — decode incoming PlayerInputs and forward to FSM
+// UART mega_link → game (PlayerInput + PlayerPresence dispatch)
 // ---------------------------------------------------------------------------
-static void pumpPlayerInputs() {
-    for (uint8_t i = 0; i < 4; ++i) {
-        catan_PlayerInput in = catan_PlayerInput_init_zero;
-        uint32_t sender = 0;
-        if (!comm::pollPlayerInput(in, sender)) return;
-        if (in.player_id >= MAX_PLAYERS) {
-            LOGW("INPUT", "drop bad player_id=%u from sender=%lu",
-                 (unsigned)in.player_id, (unsigned long)sender);
-            continue;
-        }
-        LOGI("INPUT", "P%u action=%u vp=%u (sender=%lu)",
-             (unsigned)(in.player_id + 1), (unsigned)in.action,
-             (unsigned)in.vp, (unsigned long)sender);
-        sm.handlePlayerAction(in.player_id, toActionKind(in.action), (uint8_t)in.vp);
+static void handlePlayerInputFrame(const uint8_t* payload, uint8_t len) {
+    catan_PlayerInput in = catan_PlayerInput_init_zero;
+    if (!catan_decode_player_input(payload, len, &in)) {
+        LOGW("LINK", "PlayerInput decode fail (len=%u)", (unsigned)len);
+        return;
+    }
+    if (in.player_id >= MAX_PLAYERS) {
+        LOGW("LINK", "PlayerInput bad player_id=%u", (unsigned)in.player_id);
+        return;
+    }
+    LOGI("INPUT", "P%u action=%u vp=%u client='%s'",
+         (unsigned)(in.player_id + 1), (unsigned)in.action,
+         (unsigned)in.vp, in.client_id);
+
+    // Forward REPORT vp via the dedicated REPORT path; for READY we
+    // overload `vp` as the new ready bit (1 = ready, 0 = unready).
+    uint8_t aux_vp = in.vp & 0xFF;
+    if (in.action == catan_PlayerAction_ACTION_READY) {
+        // The app sends ACTION_READY with no payload — treat as toggle:
+        // if vp==0 it means "set unready", any non-zero means "set ready".
+        // For simplicity we toggle here so the same button works both ways.
+        if (in.vp == 0) aux_vp = game::playerReady(in.player_id) ? 0 : 1;
+    }
+    sm.handlePlayerAction(in.player_id, toActionKind(in.action), aux_vp);
+}
+
+static void handlePresenceFrame(const uint8_t* payload, uint8_t len) {
+    catan_PlayerPresence pres = catan_PlayerPresence_init_zero;
+    if (!catan_decode_player_presence(payload, len, &pres)) {
+        LOGW("LINK", "PlayerPresence decode fail (len=%u)", (unsigned)len);
+        return;
+    }
+    uint8_t mask = (uint8_t)(pres.connected_mask & 0x0F);
+    uint8_t highest = 0;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
+        bool c = (mask & (1u << p)) != 0;
+        game::setPlayerConnected(p, c);
+        if (c) highest = (uint8_t)(p + 1);
+        if (!c) game::setPlayerReady(p, false);   // disconnect drops ready
+    }
+    game::setNumPlayers(highest);
+    LOGI("PRES", "mask=0x%02X num_players=%u", (unsigned)mask, (unsigned)highest);
+}
+
+static void onLinkFrame(uint8_t type, const uint8_t* payload, uint8_t len) {
+    switch (type) {
+        case CATAN_MSG_PLAYER_INPUT:    handlePlayerInputFrame(payload, len); break;
+        case CATAN_MSG_PLAYER_PRESENCE: handlePresenceFrame(payload, len);    break;
+        default:
+            LOGW("LINK", "unknown frame type=0x%02X len=%u", type, len);
+            break;
     }
 }
 
 // ---------------------------------------------------------------------------
-// BoardState broadcast
+// BoardState broadcast (Mega -> hub -> mobiles)
 // ---------------------------------------------------------------------------
 static void broadcastBoardState() {
     catan_BoardState s = catan_BoardState_init_zero;
+    s.proto_version  = CATAN_PROTO_VERSION;
     s.phase          = phaseToProto(game::phase());
     s.num_players    = game::numPlayers();
     s.current_player = game::currentPlayer();
@@ -337,18 +355,24 @@ static void broadcastBoardState() {
         s.tiles_packed.bytes[t] = (uint8_t)((biome_c << 4) | number);
     }
 
-    s.vp_count = game::numPlayers();
-    for (uint8_t p = 0; p < s.vp_count && p < 4; ++p) {
-        s.vp[p] = game::reportedVp(p);
-    }
+    s.vp_count = MAX_PLAYERS;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.vp[p] = game::reportedVp(p);
 
-    comm::sendBoardState(s);
+    s.ready_count = MAX_PLAYERS;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.ready[p] = game::playerReady(p) ? 1 : 0;
+
+    uint8_t buf[CATAN_MAX_PAYLOAD];
+    size_t n = catan_encode_board_state(&s, buf, sizeof(buf));
+    if (n == 0) {
+        LOGE("BCAST", "BoardState encode fail");
+        return;
+    }
+    mega_link::send(CATAN_MSG_BOARD_STATE, buf, (uint8_t)n);
 }
 
 // =============================================================================
 // setup() / loop()
 // =============================================================================
-
 void setup() {
     Serial.begin(SERIAL_BAUD);
     while (!Serial) { ; }
@@ -360,13 +384,10 @@ void setup() {
     Serial.println(CATAN_PROTO_VERSION);
     Serial.println(F("======================================"));
 
-    LOGI("BOOT", "Wire.begin() @100kHz");
+    LOGI("BOOT", "Wire.begin() @100kHz (sensor bus only)");
     Serial.flush();
     Wire.begin();
     Wire.setClock(100000);
-    // AVR Wire has no default timeout: a missing/broken I2C bus or a dead
-    // expander will hang requestFrom/endTransmission forever. Give it a
-    // 25ms ceiling so boot can always progress.
     Wire.setWireTimeout(25000UL, /*reset_on_timeout=*/true);
 
     LOGI("BOOT", "led::init");
@@ -399,9 +420,9 @@ void setup() {
     Serial.flush();
     dice::init(dice_seed);
 
-    LOGI("BOOT", "comm::init (bridge UART)");
+    LOGI("BOOT", "mega_link::init (Serial1 to BLE hub)");
     Serial.flush();
-    comm::init();
+    mega_link::init(onLinkFrame);
 
     LOGI("BOOT", "game::init");
     Serial.flush();
@@ -417,21 +438,23 @@ void setup() {
 
     if (DEMO_MODE) {
         runDemoFrame();
-        LOGI("DEMO", "demo mode ON — cycling tiles every %lums", (unsigned long)DEMO_CYCLE_MS);
+        LOGI("DEMO", "demo mode ON — cycling tiles every %lums",
+             (unsigned long)DEMO_CYCLE_MS);
     }
 }
 
 static void logHeartbeat() {
-    const comm::Stats& s = comm::stats();
-    LOGI("HB", "phase=%s loops=%lu bs_tx=%lu tx_bytes=%lu rx_bytes=%lu rx_ok=%lu rx_bad=%lu rx_dup=%lu",
+    const mega_link::Stats& s = mega_link::stats();
+    LOGI("HB", "phase=%s loops=%lu mask=0x%02X ready=0x%02X uart rx=%lu fr=%lu bad_crc=%lu tx=%lu drop=%lu",
          game::phaseName(game::phase()),
          (unsigned long)loop_count,
-         (unsigned long)s.tx_boardstate,
-         (unsigned long)s.tx_bytes,
+         (unsigned)game::connectedMask(),
+         (unsigned)game::readyMask(),
          (unsigned long)s.rx_bytes,
-         (unsigned long)s.rx_frames_ok,
-         (unsigned long)s.rx_frames_bad,
-         (unsigned long)s.rx_dups);
+         (unsigned long)s.rx_frames,
+         (unsigned long)s.rx_bad_crc,
+         (unsigned long)s.tx_frames,
+         (unsigned long)s.tx_dropped);
 }
 
 void loop() {
@@ -449,14 +472,10 @@ void loop() {
     sensor::poll();
     pumpSensors();
 
-    if (millis() - last_input_poll_ms >= INPUT_POLL_MS) {
-        last_input_poll_ms = millis();
-        pumpPlayerInputs();
-    }
+    mega_link::poll();    // dispatches PlayerInput + PlayerPresence
 
     sm.tick(millis());
 
-    // Drain all pending effects before the next iteration.
     core::Effect ef;
     while (sm.pollEffect(ef)) applyEffect(ef);
 

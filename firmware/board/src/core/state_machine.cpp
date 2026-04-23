@@ -63,19 +63,15 @@ void StateMachine::setPhase_(GamePhase p) {
 void StateMachine::handlePlayerAction(uint8_t player, ActionKind action, uint8_t vp) {
     if (player >= MAX_PLAYERS) return;
 
-    // Mark sender as connected and bump num_players on first contact.
-    if (!game::playerConnected(player)) {
-        game::setPlayerConnected(player, true);
-        uint8_t new_n = 0;
-        for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
-            if (game::playerConnected(p)) new_n = (uint8_t)(p + 1);
-        }
-        if (new_n > game::numPlayers()) game::setNumPlayers(new_n);
-    }
-
     // Cache self-reported VP.
     if (action == ActionKind::REPORT) {
         game::setReportedVp(player, vp);
+        return;
+    }
+
+    // Lobby readiness toggle — `vp` doubles as the new ready value (0/1).
+    if (action == ActionKind::READY) {
+        game::setPlayerReady(player, vp != 0);
         return;
     }
 
@@ -86,7 +82,6 @@ void StateMachine::handlePlayerAction(uint8_t player, ActionKind action, uint8_t
     // Current-player-only actions: capture for the tick handler.
     if (player == game::currentPlayer()) {
         if (action != ActionKind::NONE &&
-            action != ActionKind::READY &&
             action != ActionKind::REPORT) {
             pending_current_    = action;
             pending_current_vp_ = vp;
@@ -244,6 +239,7 @@ void StateMachine::handleLobby_() {
         }
 
         board_setup_done_ = false;
+        game::clearReady();
         setPhase_(GamePhase::BOARD_SETUP);
     }
 }

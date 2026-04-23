@@ -3,36 +3,35 @@ syntax = "proto3";
 package catan;
 
 // =============================================================================
-// Settlers of Catan — wire protocol (v4)
+// Settlers of Catan — wire protocol (v6)
 //
-// Architecture (all links share the same framing and the same Envelope shape):
+// Architecture:
 //
-//   [Arduino Mega board] --Serial-->  [Heltec V3 bridge]
-//   [Heltec V3 bridge]   --LoRa-->    [Heltec V3 player x4]
-//   [Heltec V3 player]   --BLE-->     [mobile app]
+//   [Arduino Mega board]  <--UART(Serial1)-->  [ESP32-C6 player hub]  <--BLE-->  [up to 4 mobiles]
 //
-// Every link carries a single top-level `Envelope` message. The envelope holds
-// transport metadata (sender, sequence number, timestamp, type) plus a oneof
-// body carrying the actual payload.
+// One Mega owns the game FSM, LEDs, and the I2C bus to the PCF8574 sensor
+// expanders. One ESP32-C6 owns BLE — it accepts up to four concurrent
+// connections from mobile devices, assigns each device a stable player
+// slot (0..3), and bridges traffic to/from the Mega over a UART link.
 //
-// Wire frame (unchanged from v3 — every hop):
+// UART frame (both directions):
 //
-//   [ 0xCA magic ] [ len : uint8 ] [ nanopb Envelope payload : len bytes ]
+//   [ 0xCA magic ][ type : uint8 ][ len : uint8 ][ nanopb payload : len bytes ][ crc8 : uint8 ]
 //
-// Receivers MUST discard frames whose first byte is not 0xCA.
+// Type codes:
+//   0x01  BoardState     (Mega -> hub -> mobiles, broadcast)
+//   0x02  PlayerInput    (mobile -> hub -> Mega)
+//   0x03  PlayerPresence (hub -> Mega, whenever the connected slot mask changes)
 //
-// Reliability model (Phase 1):
+// CRC-8 (poly 0x07, init 0x00) covers [type, len, payload]. Receivers MUST
+// drop frames that fail CRC or whose first byte is not 0xCA.
 //
-//   - Envelope.reliable=true requests the receiver to respond with an Ack
-//     carrying (ack_sender, ack_seq) equal to this envelope's (sender_id,
-//     sequence_number). The sender retransmits with exponential backoff until
-//     acked or giving up.
-//   - Receivers track the highest sequence_number seen per sender_id and drop
-//     duplicates, so retries are idempotent.
-//   - Fire-and-forget BoardState broadcasts use reliable=false (the next tick
-//     supersedes any loss). Player inputs use reliable=true.
+// BLE wire format (per connection):
+//   mobile -> hub:  bare nanopb PlayerInput bytes (no header — ATT carries length)
+//   hub -> mobile:  bare nanopb BoardState bytes  (notify on state characteristic)
 //
-// Schema version: 4 — bumped from v3 (envelope introduced).
+// Schema version: 6 — single-hub redesign (no per-player I2C slaves), adds
+// PlayerPresence, ACTION_READY, and PlayerInput.client_id for identity.
 // =============================================================================
 
 // ----- Enums ----------------------------------------------------------------
@@ -48,51 +47,29 @@ enum GamePhase {
 }
 
 enum PlayerAction {
-  ACTION_NONE         = 0;
-  ACTION_READY        = 1;
-  ACTION_START_GAME   = 2;
-  ACTION_NEXT_NUMBER  = 3;
-  ACTION_PLACE_DONE   = 4;
-  ACTION_ROLL_DICE    = 5;
-  ACTION_END_TURN     = 6;
-  ACTION_SKIP_ROBBER  = 7;
-  ACTION_REPORT       = 8;
-  ACTION_REQUEST_SYNC = 9;   // asks the board to resend a full state snapshot
+  ACTION_NONE        = 0;
+  ACTION_READY       = 1;
+  ACTION_START_GAME  = 2;
+  ACTION_NEXT_NUMBER = 3;
+  ACTION_PLACE_DONE  = 4;
+  ACTION_ROLL_DICE   = 5;
+  ACTION_END_TURN    = 6;
+  ACTION_SKIP_ROBBER = 7;
+  ACTION_REPORT      = 8;
 }
 
-// MessageType mirrors the Envelope.body oneof discriminant for easy logging
-// and routing without needing to inspect the oneof tag. The numeric values
-// match the field tag of the corresponding body entry.
-enum MessageType {
-  MSG_UNSPECIFIED  = 0;
-  MSG_BOARD_STATE  = 10;
-  MSG_PLAYER_INPUT = 11;
-  MSG_ACK          = 12;
-  MSG_NACK         = 13;
-  MSG_SYNC_REQUEST = 14;
-}
-
-enum NackReason {
-  NACK_UNKNOWN           = 0;
-  NACK_BAD_PROTO         = 1;
-  NACK_BAD_STATE         = 2;
-  NACK_OUT_OF_TURN       = 3;
-  NACK_INVALID_PLACEMENT = 4;
-  NACK_UNKNOWN_SENDER    = 5;
-}
-
-// Biome codes (packed into `BoardState.tiles_packed` high nibble of each byte).
-// Keep in sync with Biome enum in board firmware.
+// Biome codes (packed into BoardState.tiles_packed high nibble of each byte).
 //   0 = DESERT, 1 = FOREST, 2 = PASTURE, 3 = FIELD, 4 = HILL, 5 = MOUNTAIN
 //
 // Each byte of `tiles_packed` encodes one tile:
 //   high nibble = biome (0..5)
-//   low  nibble = number (0..12; 0 = desert/no number)
+//   low  nibble = number token (0..12; 0 = desert / no token)
 // The robber lives on tile index `robber_tile`.
 
-// ----- Body messages --------------------------------------------------------
+// ----- Messages -------------------------------------------------------------
 
 message BoardState {
+  uint32    proto_version  = 1;
   GamePhase phase          = 2;
   uint32    num_players    = 3;
   uint32    current_player = 4;
@@ -101,16 +78,25 @@ message BoardState {
   uint32    die1           = 7;
   uint32    die2           = 8;
   uint32    reveal_number  = 9;
-  uint32    winner_id      = 10;
-  uint32    robber_tile    = 11;
-  uint32    connected_mask = 12;
+  uint32    winner_id      = 10;   // 0xFF if no winner yet
+  uint32    robber_tile    = 11;   // 0xFF if unplaced
+  uint32    connected_mask = 12;   // bit i set => player i has a phone connected
   bytes     tiles_packed   = 13;   // 19 bytes, one per tile (see above)
   repeated uint32 vp       = 14;   // self-reported VP per player, max 4
+  repeated uint32 ready    = 15;   // 0/1 ready flag per player slot, max 4
 }
 
 message PlayerInput {
-  uint32       player_id  = 1;
-  PlayerAction action     = 2;
+  uint32       proto_version = 1;
+  uint32       player_id     = 2;
+  PlayerAction action        = 3;
+
+  // Optional stable identifier of the originating mobile device. The hub
+  // already tags every input with the authoritative player_id derived from
+  // the BLE connection slot, so client_id is informational only (used by
+  // the Mega for diagnostics and by the hub for slot persistence).
+  string client_id = 4;
+
   // Fields below populated only for ACTION_REPORT.
   uint32 vp         = 10;
   uint32 res_lumber = 11;
@@ -120,56 +106,15 @@ message PlayerInput {
   uint32 res_ore    = 15;
 }
 
-// Positive acknowledgement — sent by the receiver of a reliable Envelope.
-// Identifies the original (sender, seq) being acked. The ack itself carries
-// its own sender_id/sequence_number in its Envelope, but is never reliable.
-message Ack {
-  uint32 ack_sender = 1;
-  uint32 ack_seq    = 2;
-}
+// PlayerPresence — sent by the hub to the Mega whenever the set of
+// connected mobile devices changes. The Mega uses this to drive the lobby
+// LED feedback and to know how many seats are filled.
+message PlayerPresence {
+  uint32 proto_version  = 1;
+  uint32 connected_mask = 2;   // bit i set => slot i has a phone connected
 
-// Negative acknowledgement — sent instead of Ack when the receiver rejects
-// a reliable Envelope. The sender SHOULD NOT retransmit.
-message Nack {
-  uint32     ack_sender = 1;
-  uint32     ack_seq    = 2;
-  NackReason reason     = 3;
-}
-
-// Station or mobile client asking the board for a full state snapshot.
-// `last_seen_seq` is informational (Phase 1 always responds with a full
-// BoardState on the next tick).
-message SyncRequest {
-  uint32 last_seen_seq = 1;
-}
-
-// ----- Envelope -------------------------------------------------------------
-
-// Common transport metadata for every wire message. All fields except `body`
-// are required-by-convention (not by proto3) and validated by receivers.
-//
-//   proto_version    = CATAN_PROTO_VERSION (currently 4). Receivers drop
-//                      envelopes with a different version.
-//   sender_id        = CATAN_NODE_* constant identifying the originator.
-//   sequence_number  = monotonic per-sender counter starting at 1. Resets on
-//                      reboot; receivers treat sequence_number <= last_seen
-//                      (from the same sender) as a duplicate and drop it.
-//   timestamp_ms     = sender-local millis() at emit time.
-//   message_type     = duplicates the body oneof discriminant.
-//   reliable         = if true, the receiver responds with Ack/Nack.
-message Envelope {
-  uint32      proto_version   = 1;
-  uint32      sender_id       = 2;
-  uint32      sequence_number = 3;
-  uint32      timestamp_ms    = 4;
-  MessageType message_type    = 5;
-  bool        reliable        = 6;
-
-  oneof body {
-    BoardState  board_state  = 10;
-    PlayerInput player_input = 11;
-    Ack         ack          = 12;
-    Nack        nack         = 13;
-    SyncRequest sync_request = 14;
-  }
+  // Stable client_id per slot (empty string if the slot is vacant). Lets
+  // the Mega log which devices are seated where without needing its own
+  // BLE stack.
+  repeated string client_ids = 3;
 }

@@ -70,13 +70,13 @@ const TileLedMap TILE_LED_MAP[TILE_COUNT] = {
 // Row index = port ID.  {indices[], count}
 // Default: 1 LED per port, sequential after the tile LEDs.
 const PortLedMap PORT_LED_MAP[PORT_COUNT] = {
-    /* P0 (3:1)       */ { {38}, 1 },
-    /* P1 (Lumber 2:1)*/ { {39}, 1 },
-    /* P2 (3:1)       */ { {40}, 1 },
-    /* P3 (Wool 2:1)  */ { {41}, 1 },
-    /* P4 (3:1)       */ { {42}, 1 },
-    /* P5 (Grain 2:1) */ { {43}, 1 },
-    /* P6 (Brick 2:1) */ { {44}, 1 },
-    /* P7 (3:1)       */ { {45}, 1 },
-    /* P8 (Ore 2:1)   */ { {46}, 1 },
+    /* P0 (3:1)       */ { {48}, 1 },
+    /* P1 (Lumber 2:1)*/ { {28}, 1 },
+    /* P2 (3:1)       */ { {8}, 1 },
+    /* P3 (Wool 2:1)  */ { {5}, 1 },
+    /* P4 (3:1)       */ { {0}, 1 },
+    /* P5 (Grain 2:1) */ { {17}, 1 },
+    /* P6 (Brick 2:1) */ { {38}, 1 },
+    /* P7 (3:1)       */ { {40}, 1 },
+    /* P8 (Ore 2:1)   */ { {45}, 1 },
 };

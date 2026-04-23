@@ -1,16 +1,10 @@
 #pragma once
 // =============================================================================
-// catan_log.h — Uniform logging macros for every Catan firmware.
+// catan_log.h — Uniform logging macros (identical copy lives in board/).
 //
-// All three firmwares (board / bridge / player) carry an identical copy so
-// logs share the same format and can be diffed easily:
+//   [   12345] I [TAG ] message text
 //
-//   [   12345] I [COMM] BoardState tx #42 len=97
-//    └─ millis └─ lvl └─ tag └─ message
-//
-// The Arduino AVR core's HardwareSerial does NOT implement printf, so we use
-// a small vsnprintf wrapper that works on both AVR and ESP32. Each level is
-// compiled in/out with CATAN_LOG_LEVEL (0..4).
+// Each level is compiled in/out with CATAN_LOG_LEVEL (0..4).
 // =============================================================================
 
 #include <Arduino.h>
@@ -22,7 +16,7 @@
 #endif
 
 #ifndef CATAN_LOG_BUF_SIZE
-#define CATAN_LOG_BUF_SIZE 160
+#define CATAN_LOG_BUF_SIZE 192
 #endif
 
 static inline void catan_log_emit_(char lvl, const char* tag,
@@ -35,7 +29,6 @@ static inline void catan_log_emit_(char lvl, const char* tag,
     if (n < 0) return;
     Serial.print('[');
     unsigned long ms = millis();
-    // Right-align millis in 8 chars so log lines stay columnar.
     if      (ms <       10UL) Serial.print(F("       "));
     else if (ms <      100UL) Serial.print(F("      "));
     else if (ms <     1000UL) Serial.print(F("     "));
@@ -59,19 +52,16 @@ static inline void catan_log_emit_(char lvl, const char* tag,
 #else
 #  define LOGE(tag, fmt, ...) ((void)0)
 #endif
-
 #if CATAN_LOG_LEVEL >= 2
 #  define LOGW(tag, fmt, ...) catan_log_emit_('W', tag, fmt, ##__VA_ARGS__)
 #else
 #  define LOGW(tag, fmt, ...) ((void)0)
 #endif
-
 #if CATAN_LOG_LEVEL >= 3
 #  define LOGI(tag, fmt, ...) catan_log_emit_('I', tag, fmt, ##__VA_ARGS__)
 #else
 #  define LOGI(tag, fmt, ...) ((void)0)
 #endif
-
 #if CATAN_LOG_LEVEL >= 4
 #  define LOGD(tag, fmt, ...) catan_log_emit_('D', tag, fmt, ##__VA_ARGS__)
 #else

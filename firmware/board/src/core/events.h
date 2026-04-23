@@ -28,7 +28,6 @@ enum class ActionKind : uint8_t {
     END_TURN,
     SKIP_ROBBER,
     REPORT,
-    REQUEST_SYNC,
 };
 
 enum class EffectKind : uint8_t {
