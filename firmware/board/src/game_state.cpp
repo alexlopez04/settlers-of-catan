@@ -16,6 +16,7 @@ uint8_t      current_player_  = 0;
 bool         player_connected_[MAX_PLAYERS] = {};
 bool         player_ready_[MAX_PLAYERS]     = {};
 uint8_t      reported_vp_[MAX_PLAYERS]      = {};
+uint8_t      reported_res_[MAX_PLAYERS][5]  = {};
 
 VertexState  vertices[VERTEX_COUNT];
 EdgeState    edges[EDGE_COUNT];
@@ -57,6 +58,7 @@ void init() {
     memset(player_connected_, 0, sizeof(player_connected_));
     memset(player_ready_,     0, sizeof(player_ready_));
     memset(reported_vp_,      0, sizeof(reported_vp_));
+    memset(reported_res_,     0, sizeof(reported_res_));
 
     for (uint8_t i = 0; i < VERTEX_COUNT; ++i) {
         vertices[i].owner   = NO_PLAYER;
@@ -121,6 +123,14 @@ uint8_t checkWinner() {
         if (reported_vp_[p] >= VP_TO_WIN) return p;
     }
     return NO_PLAYER;
+}
+
+// ── Self-reported resources ─────────────────────────────────────────────────
+uint8_t reportedRes(uint8_t p, uint8_t r) {
+    return (p < MAX_PLAYERS && r < 5) ? reported_res_[p][r] : 0;
+}
+void setReportedRes(uint8_t p, uint8_t r, uint8_t count) {
+    if (p < MAX_PLAYERS && r < 5) reported_res_[p][r] = count;
 }
 
 // ── Lobby readiness ─────────────────────────────────────────────────────────

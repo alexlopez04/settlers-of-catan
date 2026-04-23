@@ -221,18 +221,18 @@ const EdgeDef EDGE_TOPO[EDGE_COUNT] = {
 
 // ── Port Topology ───────────────────────────────────────────────────────────
 // Edit the `type` field to reconfigure which port goes where.
-// The vertex pairs are fixed by the board geometry.
+// Vertex pairs verified against the physical board sensor positions.
 //   id   type                    vertices
 const PortDef PORT_TOPO[PORT_COUNT] = {
-    /* P0 */ { 0, PortType::GENERIC_3_1, { 24, 25} },
-    /* P1 */ { 1, PortType::LUMBER_2_1,  { 27, 53} },
-    /* P2 */ { 2, PortType::GENERIC_3_1, { 48, 52} },
-    /* P3 */ { 3, PortType::WOOL_2_1,    { 45, 46} },
-    /* P4 */ { 4, PortType::GENERIC_3_1, { 43, 44} },
-    /* P5 */ { 5, PortType::GRAIN_2_1,   { 38, 42} },
-    /* P6 */ { 6, PortType::BRICK_2_1,   { 36, 37} },
-    /* P7 */ { 7, PortType::GENERIC_3_1, { 33, 34} },
-    /* P8 */ { 8, PortType::ORE_2_1,     { 28, 31} },
+    /* P0 */ { 0, PortType::GENERIC_3_1, { 24,  7} },
+    /* P1 */ { 1, PortType::LUMBER_2_1,  { 25, 26} },
+    /* P2 */ { 2, PortType::GENERIC_3_1, {  8, 27} },
+    /* P3 */ { 3, PortType::WOOL_2_1,    { 19, 23} },
+    /* P4 */ { 4, PortType::GENERIC_3_1, { 21, 43} },
+    /* P5 */ { 5, PortType::GRAIN_2_1,   { 44, 40} },
+    /* P6 */ { 6, PortType::BRICK_2_1,   { 38, 39} },
+    /* P7 */ { 7, PortType::GENERIC_3_1, { 15, 36} },
+    /* P8 */ { 8, PortType::ORE_2_1,     { 10, 12} },
 };
 
 // ── Runtime tile state ──────────────────────────────────────────────────────

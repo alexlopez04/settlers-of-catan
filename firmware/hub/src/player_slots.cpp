@@ -1,59 +1,30 @@
 // =============================================================================
 // player_slots.cpp — see header.
 //
-// The persistent map lives in NVS as MAX_PLAYERS string keys "slot0"..
-// "slot3", each holding the bound client_id (or empty/missing for vacant).
+// The in-memory map is session-scoped: it is cleared on every power cycle so
+// player numbers are never carried over from a previous game.  Within a
+// session, the table survives brief BLE disconnects so a reconnecting device
+// returns to the same seat without NVS involvement.
 // =============================================================================
 
 #include "player_slots.h"
 #include "catan_log.h"
 
-#include <Preferences.h>
 #include <string.h>
 
 namespace {
 
 slots::Slot g_table[MAX_PLAYERS];
-Preferences g_prefs;
-constexpr const char* NVS_NAMESPACE = "catan";
-
-const char* nvsKey(uint8_t i) {
-    static const char* kKeys[MAX_PLAYERS] = {"slot0", "slot1", "slot2", "slot3"};
-    return kKeys[i];
-}
-
-void persistSlot(uint8_t i) {
-    if (i >= MAX_PLAYERS) return;
-    if (g_table[i].client_id[0] == '\0') {
-        g_prefs.remove(nvsKey(i));
-    } else {
-        g_prefs.putString(nvsKey(i), g_table[i].client_id);
-    }
-}
 
 }  // namespace
 
 namespace slots {
 
 void init() {
-    g_prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
     for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-        g_table[i].occupied    = false;
-        g_table[i].conn_handle = NO_CONN;
-        // Guard with isKey() — getString() on a missing key emits an [E] log
-        // from the ESP-IDF NVS layer even when a default is supplied.
-        if (g_prefs.isKey(nvsKey(i))) {
-            String s = g_prefs.getString(nvsKey(i), "");
-            size_t n = s.length();
-            if (n >= CLIENT_ID_MAX) n = CLIENT_ID_MAX - 1;
-            memcpy(g_table[i].client_id, s.c_str(), n);
-            g_table[i].client_id[n] = '\0';
-            if (n) {
-                LOGI("SLOT", "restored slot %u <- '%s'", (unsigned)i, g_table[i].client_id);
-            }
-        } else {
-            g_table[i].client_id[0] = '\0';
-        }
+        g_table[i].occupied       = false;
+        g_table[i].conn_handle    = NO_CONN;
+        g_table[i].client_id[0]   = '\0';
     }
 }
 
@@ -103,7 +74,6 @@ uint8_t claim(const char* client_id, uint16_t conn) {
     if (changed) {
         strncpy(g_table[slot].client_id, client_id, CLIENT_ID_MAX - 1);
         g_table[slot].client_id[CLIENT_ID_MAX - 1] = '\0';
-        persistSlot(slot);
     }
     g_table[slot].occupied    = true;
     g_table[slot].conn_handle = conn;

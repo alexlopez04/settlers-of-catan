@@ -6,7 +6,7 @@
 #error Regenerate this file with the current version of nanopb generator.
 #endif
 
-PB_BIND(catan_BoardState, catan_BoardState, AUTO)
+PB_BIND(catan_BoardState, catan_BoardState, 2)
 
 
 PB_BIND(catan_PlayerInput, catan_PlayerInput, AUTO)

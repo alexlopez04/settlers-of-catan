@@ -63,11 +63,11 @@ static void runDemoFrame() {
 
 static CRGB portColor(PortType pt) {
     switch (pt) {
-        case PortType::LUMBER_2_1:  return CRGB(0, 100, 0);
-        case PortType::WOOL_2_1:    return CRGB(144, 238, 144);
-        case PortType::GRAIN_2_1:   return CRGB(255, 215, 0);
-        case PortType::BRICK_2_1:   return CRGB(178, 34, 34);
-        case PortType::ORE_2_1:     return CRGB(128, 128, 128);
+        case PortType::LUMBER_2_1:  return CRGB(0, 200, 0);    // matches FOREST biome
+        case PortType::WOOL_2_1:    return CRGB(255, 255, 0);  // matches PASTURE biome
+        case PortType::GRAIN_2_1:   return CRGB(255, 165, 0);  // matches FIELD biome
+        case PortType::BRICK_2_1:   return CRGB(255, 0, 0);    // matches HILL biome
+        case PortType::ORE_2_1:     return CRGB(128, 0, 128);  // matches MOUNTAIN biome
         case PortType::GENERIC_3_1: return CRGB::White;
         default:                    return CRGB::Black;
     }
@@ -128,6 +128,8 @@ static const char* rejectReasonName(core::RejectReason r) {
         default:                                           return "NONE";
     }
 }
+
+static void broadcastBoardState();
 
 static void applyEffect(const core::Effect& ef) {
     using core::EffectKind;
@@ -213,6 +215,10 @@ static void applyEffect(const core::Effect& ef) {
                  (unsigned)(game::currentPlayer() + 1),
                  (unsigned)d1, (unsigned)d2, (unsigned)total,
                  ef.c ? " -> ROBBER" : "");
+            // Broadcast immediately so the phone sees the result at the same
+            // moment the board starts flashing, not after the blocking flash.
+            broadcastBoardState();
+            last_broadcast_ms = millis();
             uint8_t matching[TILE_COUNT];
             uint8_t match_count = 0;
             for (uint8_t t = 0; t < TILE_COUNT; ++t) {
@@ -296,6 +302,14 @@ static void handlePlayerInputFrame(const uint8_t* payload, uint8_t len) {
         // For simplicity we toggle here so the same button works both ways.
         if (in.vp == 0) aux_vp = game::playerReady(in.player_id) ? 0 : 1;
     }
+    // Persist self-reported resources so reconnecting clients can restore them.
+    if (in.action == catan_PlayerAction_ACTION_REPORT) {
+        game::setReportedRes(in.player_id, 0, (uint8_t)(in.res_lumber & 0xFF));
+        game::setReportedRes(in.player_id, 1, (uint8_t)(in.res_wool   & 0xFF));
+        game::setReportedRes(in.player_id, 2, (uint8_t)(in.res_grain  & 0xFF));
+        game::setReportedRes(in.player_id, 3, (uint8_t)(in.res_brick  & 0xFF));
+        game::setReportedRes(in.player_id, 4, (uint8_t)(in.res_ore    & 0xFF));
+    }
     sm.handlePlayerAction(in.player_id, toActionKind(in.action), aux_vp);
 }
 
@@ -360,6 +374,58 @@ static void broadcastBoardState() {
 
     s.ready_count = MAX_PLAYERS;
     for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.ready[p] = game::playerReady(p) ? 1 : 0;
+
+    s.res_lumber_count = MAX_PLAYERS;
+    s.res_wool_count   = MAX_PLAYERS;
+    s.res_grain_count  = MAX_PLAYERS;
+    s.res_brick_count  = MAX_PLAYERS;
+    s.res_ore_count    = MAX_PLAYERS;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
+        s.res_lumber[p] = game::reportedRes(p, 0);
+        s.res_wool[p]   = game::reportedRes(p, 1);
+        s.res_grain[p]  = game::reportedRes(p, 2);
+        s.res_brick[p]  = game::reportedRes(p, 3);
+        s.res_ore[p]    = game::reportedRes(p, 4);
+    }
+
+    // Vertex ownership — 54 vertices packed as 27 bytes (two nibbles per byte).
+    //   nibble 0x0..0x3 = settlement P0..P3
+    //   nibble 0x4..0x7 = city       P0..P3 (owner = nibble & 0x3)
+    //   nibble 0xF      = empty
+    s.vertex_owners.size = 27;
+    memset(s.vertex_owners.bytes, 0xFF, 27);
+    for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+        const VertexState& vs = game::vertexState(v);
+        if (vs.owner == NO_PLAYER) continue;
+        uint8_t nib = (uint8_t)(vs.owner & 0x3) | (vs.is_city ? 0x4 : 0x0);
+        uint8_t byte_idx = v >> 1;
+        if (v & 1) {
+            s.vertex_owners.bytes[byte_idx] =
+                (s.vertex_owners.bytes[byte_idx] & 0x0F) | (uint8_t)(nib << 4);
+        } else {
+            s.vertex_owners.bytes[byte_idx] =
+                (s.vertex_owners.bytes[byte_idx] & 0xF0) | nib;
+        }
+    }
+
+    // Edge ownership — 72 edges packed as 36 bytes (two nibbles per byte).
+    //   nibble 0x0..0x3 = road P0..P3
+    //   nibble 0xF      = empty
+    s.edge_owners.size = 36;
+    memset(s.edge_owners.bytes, 0xFF, 36);
+    for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
+        const EdgeState& es = game::edgeState(e);
+        if (es.owner == NO_PLAYER) continue;
+        uint8_t nib = (uint8_t)(es.owner & 0x3);
+        uint8_t byte_idx = e >> 1;
+        if (e & 1) {
+            s.edge_owners.bytes[byte_idx] =
+                (s.edge_owners.bytes[byte_idx] & 0x0F) | (uint8_t)(nib << 4);
+        } else {
+            s.edge_owners.bytes[byte_idx] =
+                (s.edge_owners.bytes[byte_idx] & 0xF0) | nib;
+        }
+    }
 
     uint8_t buf[CATAN_MAX_PAYLOAD];
     size_t n = catan_encode_board_state(&s, buf, sizeof(buf));

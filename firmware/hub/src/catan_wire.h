@@ -40,7 +40,7 @@ extern "C" {
 
 // Payload + framing sizes. Picked to comfortably exceed the largest
 // nanopb-encoded message we currently emit; bump if you add fat fields.
-#define CATAN_MAX_PAYLOAD     200u
+#define CATAN_MAX_PAYLOAD     240u
 #define CATAN_FRAME_OVERHEAD  4u        // magic + type + len + crc
 #define CATAN_MAX_FRAME       (CATAN_MAX_PAYLOAD + CATAN_FRAME_OVERHEAD)
 

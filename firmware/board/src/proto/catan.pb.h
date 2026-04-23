@@ -34,6 +34,8 @@ typedef enum _catan_PlayerAction {
 
 /* Struct definitions */
 typedef PB_BYTES_ARRAY_T(19) catan_BoardState_tiles_packed_t;
+typedef PB_BYTES_ARRAY_T(27) catan_BoardState_vertex_owners_t;
+typedef PB_BYTES_ARRAY_T(36) catan_BoardState_edge_owners_t;
 typedef struct _catan_BoardState {
     uint32_t proto_version;
     catan_GamePhase phase;
@@ -52,6 +54,32 @@ typedef struct _catan_BoardState {
     uint32_t vp[4]; /* self-reported VP per player, max 4 */
     pb_size_t ready_count;
     uint32_t ready[4]; /* 0/1 ready flag per player slot, max 4 */
+    /* Settlements / cities per vertex (54 vertices, packed as 27 bytes).
+   low nibble  = vertex 2*i     high nibble = vertex 2*i + 1
+   nibble value:
+     0x0..0x3 = settlement owned by player 0..3
+     0x4..0x7 = city       owned by player 0..3 (owner = nibble & 0x3)
+     0xF      = empty
+ The final nibble (index 54) is unused and is always 0xF. */
+    catan_BoardState_vertex_owners_t vertex_owners;
+    /* Roads per edge (72 edges, packed as 36 bytes).
+   low nibble  = edge 2*i     high nibble = edge 2*i + 1
+   nibble value:
+     0x0..0x3 = road owned by player 0..3
+     0xF      = empty */
+    catan_BoardState_edge_owners_t edge_owners;
+    /* Self-reported resource counts per player (via ACTION_REPORT), persisted
+ so the board can restore a reconnecting mobile's hand. Index = player id. */
+    pb_size_t res_lumber_count;
+    uint32_t res_lumber[4];
+    pb_size_t res_wool_count;
+    uint32_t res_wool[4];
+    pb_size_t res_grain_count;
+    uint32_t res_grain[4];
+    pb_size_t res_brick_count;
+    uint32_t res_brick[4];
+    pb_size_t res_ore_count;
+    uint32_t res_ore[4];
 } catan_BoardState;
 
 typedef struct _catan_PlayerInput {
@@ -106,10 +134,10 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}}
 #define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0}
 #define catan_PlayerPresence_init_default        {0, 0, 0, {"", "", "", ""}}
-#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}}
 #define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0}
 #define catan_PlayerPresence_init_zero           {0, 0, 0, {"", "", "", ""}}
 
@@ -129,6 +157,13 @@ extern "C" {
 #define catan_BoardState_tiles_packed_tag        13
 #define catan_BoardState_vp_tag                  14
 #define catan_BoardState_ready_tag               15
+#define catan_BoardState_vertex_owners_tag       16
+#define catan_BoardState_edge_owners_tag         17
+#define catan_BoardState_res_lumber_tag          20
+#define catan_BoardState_res_wool_tag            21
+#define catan_BoardState_res_grain_tag           22
+#define catan_BoardState_res_brick_tag           23
+#define catan_BoardState_res_ore_tag             24
 #define catan_PlayerInput_proto_version_tag      1
 #define catan_PlayerInput_player_id_tag          2
 #define catan_PlayerInput_action_tag             3
@@ -159,7 +194,14 @@ X(a, STATIC,   SINGULAR, UINT32,   robber_tile,      11) \
 X(a, STATIC,   SINGULAR, UINT32,   connected_mask,   12) \
 X(a, STATIC,   SINGULAR, BYTES,    tiles_packed,     13) \
 X(a, STATIC,   REPEATED, UINT32,   vp,               14) \
-X(a, STATIC,   REPEATED, UINT32,   ready,            15)
+X(a, STATIC,   REPEATED, UINT32,   ready,            15) \
+X(a, STATIC,   SINGULAR, BYTES,    vertex_owners,    16) \
+X(a, STATIC,   SINGULAR, BYTES,    edge_owners,      17) \
+X(a, STATIC,   REPEATED, UINT32,   res_lumber,       20) \
+X(a, STATIC,   REPEATED, UINT32,   res_wool,         21) \
+X(a, STATIC,   REPEATED, UINT32,   res_grain,        22) \
+X(a, STATIC,   REPEATED, UINT32,   res_brick,        23) \
+X(a, STATIC,   REPEATED, UINT32,   res_ore,          24)
 #define catan_BoardState_CALLBACK NULL
 #define catan_BoardState_DEFAULT NULL
 
@@ -194,8 +236,8 @@ extern const pb_msgdesc_t catan_PlayerPresence_msg;
 #define catan_PlayerPresence_fields &catan_PlayerPresence_msg
 
 /* Maximum encoded size of messages (where known) */
-#define CATAN_CATAN_PB_H_MAX_SIZE                catan_PlayerPresence_size
-#define catan_BoardState_size                    133
+#define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardState_size
+#define catan_BoardState_size                    342
 #define catan_PlayerInput_size                   91
 #define catan_PlayerPresence_size                176
 

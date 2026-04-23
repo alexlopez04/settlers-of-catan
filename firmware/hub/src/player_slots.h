@@ -1,11 +1,12 @@
 #pragma once
 // =============================================================================
-// player_slots.h — Stable client_id → seat (0..3) assignment for the hub.
+// player_slots.h — Session-scoped client_id → seat (0..3) assignment for the hub.
 //
 // Each mobile device is identified by a string `client_id` (a UUID the app
-// generates once and stores locally). On first sight the hub assigns the
-// lowest free seat; on reconnect the same seat is restored. The mapping
-// is mirrored in NVS under namespace "catan" so it survives reboots.
+// generates once and stores locally). On first connection the hub assigns the
+// lowest free seat; on reconnect within the same power-on session the same
+// seat is restored from the in-memory table. The table is cleared on every
+// boot so player numbers are never carried over from a previous game session.
 //
 // Each seat additionally tracks the BLE conn handle of the currently
 // linked device so the input dispatcher can authoritatively map an
@@ -40,8 +41,9 @@ uint8_t lookup(const char* client_id);
 uint8_t claim(const char* client_id, uint16_t conn);
 
 // Release the slot currently held by `conn`. Returns the freed slot or
-// NO_SLOT if `conn` wasn't linked. The client_id remains in NVS so the
-// next connection from the same device returns to the same seat.
+// NO_SLOT if `conn` wasn't linked. The client_id remains in the in-memory
+// table so the next connection from the same device within this session
+// returns to the same seat.
 uint8_t release(uint16_t conn);
 
 // Return the slot currently bound to `conn`, or NO_SLOT.

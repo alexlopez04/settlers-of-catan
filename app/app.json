@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "SoC",
+    "name": "Catan",
     "slug": "soc",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,26 +8,8 @@
     "scheme": "soc",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.aglemons.soc"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_CONNECT"
-      ]
-    },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "icon": "./assets/catan.icon",
+      "bundleIdentifier": "com.lemonyclick.soc"
     },
     "plugins": [
       "expo-router",
@@ -46,7 +28,7 @@
         {
           "isBackgroundEnabled": false,
           "modes": [],
-          "bluetoothAlwaysPermission": "Catan needs Bluetooth to connect to your player station."
+          "bluetoothAlwaysPermission": "Catan needs Bluetooth to connect to your board."
         }
       ]
     ],

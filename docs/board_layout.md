@@ -97,17 +97,17 @@ Full table (vertices are the two intersection points the port touches):
 
 | ID | Type         | Between tiles   | Vertex A | Vertex B | Direction on board |
 |----|--------------|-----------------|----------|----------|--------------------|
-| P0 | 3:1          | T07 – T08       | V24      | V25      | East               |
-| P1 | Lumber 2:1   | T18 – T07       | V27      | V53      | Northeast          |
-| P2 | 3:1          | T16 – T17       | V48      | V52      | Northeast          |
-| P3 | Wool 2:1     | T15 – T16       | V45      | V46      | North              |
-| P4 | 3:1          | T14 – T15       | V43      | V44      | Northwest          |
-| P5 | Grain 2:1    | T12 – T13       | V38      | V42      | West               |
-| P6 | Brick 2:1    | T11 – T12       | V36      | V37      | Southwest          |
-| P7 | 3:1          | T10 – T11       | V33      | V34      | South              |
-| P8 | Ore 2:1      | T08 – T09       | V28      | V31      | Southeast          |
+| P0 | 3:1          | T07 – T08       | V24      | V7       | East               |
+| P1 | Lumber 2:1   | T07             | V25      | V26      | Northeast          |
+| P2 | 3:1          | T18 – T07       | V8       | V27      | Northeast          |
+| P3 | Wool 2:1     | T06 – T16       | V19      | V23      | North              |
+| P4 | 3:1          | T14 – T15       | V21      | V43      | Northwest          |
+| P5 | Grain 2:1    | T13 – T14       | V44      | V40      | West               |
+| P6 | Brick 2:1    | T12 – T13       | V38      | V39      | Southwest          |
+| P7 | 3:1          | T11 – T12       | V15      | V36      | South              |
+| P8 | Ore 2:1      | T08 – T09       | V10      | V12      | Southeast          |
 
-Port types are editable in `PORT_TOPO[]` inside `board_topology.cpp`; only the `type` field needs to change — the vertex pairs are fixed by geometry.
+Port types and vertex pairs are both editable in `PORT_TOPO[]` inside `board_topology.cpp`. Keep the vertex pairs in sync with `app/src/constants/board-topology.ts` (`PORTS` array).
 
 ---
 

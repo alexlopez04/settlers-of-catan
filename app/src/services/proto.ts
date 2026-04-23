@@ -56,6 +56,20 @@ export interface Tile {
   number: number;
 }
 
+/** Vertex ownership. Empty vertices are omitted from `vertices`. */
+export interface VertexOwner {
+  /** Player 0..3 */
+  owner: number;
+  /** true = city, false = settlement */
+  city: boolean;
+}
+
+/** Edge (road) ownership. Empty edges are omitted from `edges`. */
+export interface EdgeOwner {
+  /** Player 0..3 */
+  owner: number;
+}
+
 export interface BoardState {
   protoVersion: number;
   phase: GamePhase;
@@ -73,6 +87,16 @@ export interface BoardState {
   vp: number[];
   /** 1 per player, 1 = ready in lobby. */
   ready: number[];
+  /** Self-reported resource counts per player (index = player id). */
+  resLumber: number[];
+  resWool: number[];
+  resGrain: number[];
+  resBrick: number[];
+  resOre: number[];
+  /** Length 54; index = vertex id; null if empty. */
+  vertices: (VertexOwner | null)[];
+  /** Length 72; index = edge id; null if empty. */
+  edges: (EdgeOwner | null)[];
 }
 
 export interface PlayerInput {
@@ -249,6 +273,13 @@ function emptyBoardState(): BoardState {
     tiles: [],
     vp: [0, 0, 0, 0],
     ready: [0, 0, 0, 0],
+    resLumber: [0, 0, 0, 0],
+    resWool:   [0, 0, 0, 0],
+    resGrain:  [0, 0, 0, 0],
+    resBrick:  [0, 0, 0, 0],
+    resOre:    [0, 0, 0, 0],
+    vertices: Array.from({ length: 54 }, () => null),
+    edges: Array.from({ length: 72 }, () => null),
   };
 }
 
@@ -262,6 +293,39 @@ function unpackTiles(packed: Uint8Array): Tile[] {
     });
   }
   return tiles;
+}
+
+/**
+ * 54 vertices packed as 27 bytes (two 4-bit nibbles per byte, low nibble first).
+ * Nibble value: 0x0..0x3 = settlement owner 0..3, 0x4..0x7 = city owner 0..3
+ * (owner = nibble & 0x3), 0xF = empty. Last (55th) nibble is unused.
+ */
+function unpackVertices(packed: Uint8Array): (VertexOwner | null)[] {
+  const out: (VertexOwner | null)[] = Array.from({ length: 54 }, () => null);
+  for (let v = 0; v < 54; v++) {
+    const byte = packed[v >> 1];
+    if (byte === undefined) break;
+    const nib = (v & 1) ? (byte >> 4) & 0x0f : byte & 0x0f;
+    if (nib === 0x0f) continue;
+    out[v] = { owner: nib & 0x03, city: (nib & 0x04) !== 0 };
+  }
+  return out;
+}
+
+/**
+ * 72 edges packed as 36 bytes (two 4-bit nibbles per byte, low nibble first).
+ * Nibble value: 0x0..0x3 = road owner, 0xF = empty.
+ */
+function unpackEdges(packed: Uint8Array): (EdgeOwner | null)[] {
+  const out: (EdgeOwner | null)[] = Array.from({ length: 72 }, () => null);
+  for (let e = 0; e < 72; e++) {
+    const byte = packed[e >> 1];
+    if (byte === undefined) break;
+    const nib = (e & 1) ? (byte >> 4) & 0x0f : byte & 0x0f;
+    if (nib === 0x0f) continue;
+    out[e] = { owner: nib & 0x03 };
+  }
+  return out;
 }
 
 function readPackedVarints(chunk: Uint8Array): number[] {
@@ -318,6 +382,37 @@ function decodeBoardStatePayload(buf: Uint8Array): BoardState | null {
         case 15: {
           const rs = readPackedVarints(chunk);
           state.ready = [rs[0] ?? 0, rs[1] ?? 0, rs[2] ?? 0, rs[3] ?? 0];
+          break;
+        }
+        case 16:
+          state.vertices = unpackVertices(chunk);
+          break;
+        case 17:
+          state.edges = unpackEdges(chunk);
+          break;
+        case 20: {
+          const vs = readPackedVarints(chunk);
+          state.resLumber = [vs[0] ?? 0, vs[1] ?? 0, vs[2] ?? 0, vs[3] ?? 0];
+          break;
+        }
+        case 21: {
+          const vs = readPackedVarints(chunk);
+          state.resWool = [vs[0] ?? 0, vs[1] ?? 0, vs[2] ?? 0, vs[3] ?? 0];
+          break;
+        }
+        case 22: {
+          const vs = readPackedVarints(chunk);
+          state.resGrain = [vs[0] ?? 0, vs[1] ?? 0, vs[2] ?? 0, vs[3] ?? 0];
+          break;
+        }
+        case 23: {
+          const vs = readPackedVarints(chunk);
+          state.resBrick = [vs[0] ?? 0, vs[1] ?? 0, vs[2] ?? 0, vs[3] ?? 0];
+          break;
+        }
+        case 24: {
+          const vs = readPackedVarints(chunk);
+          state.resOre = [vs[0] ?? 0, vs[1] ?? 0, vs[2] ?? 0, vs[3] ?? 0];
           break;
         }
       }

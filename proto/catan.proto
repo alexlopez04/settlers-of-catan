@@ -84,6 +84,30 @@ message BoardState {
   bytes     tiles_packed   = 13;   // 19 bytes, one per tile (see above)
   repeated uint32 vp       = 14;   // self-reported VP per player, max 4
   repeated uint32 ready    = 15;   // 0/1 ready flag per player slot, max 4
+
+  // Settlements / cities per vertex (54 vertices, packed as 27 bytes).
+  //   low nibble  = vertex 2*i     high nibble = vertex 2*i + 1
+  //   nibble value:
+  //     0x0..0x3 = settlement owned by player 0..3
+  //     0x4..0x7 = city       owned by player 0..3 (owner = nibble & 0x3)
+  //     0xF      = empty
+  // The final nibble (index 54) is unused and is always 0xF.
+  bytes vertex_owners = 16;
+
+  // Roads per edge (72 edges, packed as 36 bytes).
+  //   low nibble  = edge 2*i     high nibble = edge 2*i + 1
+  //   nibble value:
+  //     0x0..0x3 = road owned by player 0..3
+  //     0xF      = empty
+  bytes edge_owners = 17;
+
+  // Self-reported resource counts per player (via ACTION_REPORT), persisted
+  // so the board can restore a reconnecting mobile's hand. Index = player id.
+  repeated uint32 res_lumber = 20;
+  repeated uint32 res_wool   = 21;
+  repeated uint32 res_grain  = 22;
+  repeated uint32 res_brick  = 23;
+  repeated uint32 res_ore    = 24;
 }
 
 message PlayerInput {

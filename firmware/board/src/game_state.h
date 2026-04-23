@@ -59,6 +59,11 @@ uint8_t reportedVp(uint8_t player);
 void    setReportedVp(uint8_t player, uint8_t vp);
 uint8_t checkWinner();                // returns player id or NO_PLAYER
 
+// Self-reported resources (via PlayerInput ACTION_REPORT).
+// res_idx: 0=lumber 1=wool 2=grain 3=brick 4=ore
+uint8_t reportedRes(uint8_t player, uint8_t res_idx);
+void    setReportedRes(uint8_t player, uint8_t res_idx, uint8_t count);
+
 // Lobby readiness — toggled by ACTION_READY in PHASE_LOBBY.
 bool    playerReady(uint8_t player);
 void    setPlayerReady(uint8_t player, bool ready);

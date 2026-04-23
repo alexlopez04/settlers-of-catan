@@ -1,18 +1,29 @@
 import { router } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+  withSequence,
+  withRepeat,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useBle, ResourceCounts } from '@/context/ble-context';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { BoardState, GamePhase, NO_WINNER, PlayerAction } from '@/services/proto';
+import { SFSymbolIcon } from '@/components/ui/symbol';
+import { BoardOverview } from '@/components/ui/board-overview';
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -37,306 +48,286 @@ const RESOURCES: { key: ResKey; emoji: string; label: string }[] = [
 
 const DIE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
-// The number-reveal order matches the firmware kRevealOrder array.
 const REVEAL_ORDER = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12];
 
 // ── Button specs ──────────────────────────────────────────────────────────
 
 interface ButtonSpec {
   label: string;
+  sfSymbol?: string;
   action: PlayerAction;
   enabled: boolean;
-  primary?: boolean; // highlight with primary colour
+  primary?: boolean;
 }
 
-type ButtonRow = [ButtonSpec | null, ButtonSpec | null, ButtonSpec | null];
-
+/**
+ * Returns only the buttons relevant for the current state.
+ * Buttons always expand to fill the bar (no placeholders).
+ */
 function buttonsForPhase(
   phase: GamePhase,
   myTurn: boolean,
   hasRolled: boolean,
   connectedCount: number,
-): ButtonRow {
+): ButtonSpec[] {
   switch (phase) {
     case GamePhase.LOBBY: {
       const canStart = connectedCount >= 1;
-      return [
-        { label: 'Ready',      action: PlayerAction.READY,      enabled: true },
-        { label: 'Start Game', action: PlayerAction.START_GAME, enabled: canStart, primary: canStart },
-        null,
+      const btns: ButtonSpec[] = [
+        { label: 'Ready', sfSymbol: 'checkmark.circle', action: PlayerAction.READY, enabled: true },
       ];
+      if (canStart) {
+        btns.push({ label: 'Start Game', sfSymbol: 'play.fill', action: PlayerAction.START_GAME, enabled: true, primary: true });
+      }
+      return btns;
     }
     case GamePhase.BOARD_SETUP:
-      return [
-        null,
-        { label: 'Start Reveal →', action: PlayerAction.NEXT_NUMBER, enabled: true, primary: true },
-        null,
-      ];
+      return [{ label: 'Start Reveal', sfSymbol: 'arrow.right.circle.fill', action: PlayerAction.NEXT_NUMBER, enabled: true, primary: true }];
     case GamePhase.NUMBER_REVEAL:
-      return [
-        null,
-        { label: 'Next Number →', action: PlayerAction.NEXT_NUMBER, enabled: true, primary: true },
-        null,
-      ];
+      return [{ label: 'Next Number', sfSymbol: 'arrow.right.circle.fill', action: PlayerAction.NEXT_NUMBER, enabled: true, primary: true }];
     case GamePhase.INITIAL_PLACEMENT:
-      return [
-        null,
-        {
-          label: 'Placement Done',
-          action: PlayerAction.PLACE_DONE,
-          enabled: myTurn,
-          primary: myTurn,
-        },
-        null,
-      ];
-    case GamePhase.PLAYING:
-      return [
-        {
-          label: 'Roll Dice',
-          action: PlayerAction.ROLL_DICE,
-          enabled: myTurn && !hasRolled,
-          primary: myTurn && !hasRolled,
-        },
-        null,
-        {
-          label: 'End Turn',
-          action: PlayerAction.END_TURN,
-          enabled: myTurn && hasRolled,
-          primary: myTurn && hasRolled,
-        },
-      ];
+      return [{ label: 'Placement Done', sfSymbol: 'checkmark.circle.fill', action: PlayerAction.PLACE_DONE, enabled: myTurn, primary: myTurn }];
+    case GamePhase.PLAYING: {
+      if (!hasRolled) {
+        return [{ label: 'Roll Dice', sfSymbol: 'die.face.5.fill', action: PlayerAction.ROLL_DICE, enabled: myTurn, primary: myTurn }];
+      }
+      return [{ label: 'End Turn', sfSymbol: 'arrow.trianglehead.clockwise', action: PlayerAction.END_TURN, enabled: myTurn, primary: myTurn }];
+    }
     case GamePhase.ROBBER:
-      return [
-        null,
-        {
-          label: 'Skip Robber',
-          action: PlayerAction.SKIP_ROBBER,
-          enabled: myTurn,
-          primary: myTurn,
-        },
-        null,
-      ];
+      return [{ label: 'Skip Robber', sfSymbol: 'forward.fill', action: PlayerAction.SKIP_ROBBER, enabled: myTurn, primary: myTurn }];
     default:
-      return [null, null, null];
+      return [];
   }
 }
 
-// ── Main screen ───────────────────────────────────────────────────────────
+// ── Snake draft display helper ─────────────────────────────────────────────
 
-export default function GameScreen() {
-  const theme = useTheme();
-  const {
-    connectionState,
-    connectedName,
-    playerId,
-    gameState,
-    sendAction,
-    sendReport,
-    disconnect,
-  } = useBle();
-
-  const [localVp, setLocalVp] = useState(0);
-  const [resources, setResources] = useState<ResourceCounts>({
-    lumber: 0, wool: 0, grain: 0, brick: 0, ore: 0,
-  });
-  const [reporting, setReporting] = useState(false);
-
-  useEffect(() => {
-    if (connectionState === 'idle') router.replace('/');
-  }, [connectionState]);
-
-  const handleAction = useCallback(
-    async (action: PlayerAction) => {
-      try { await sendAction(action); } catch { /* ignore */ }
-    },
-    [sendAction],
-  );
-
-  const handleReport = useCallback(async () => {
-    setReporting(true);
-    try { await sendReport(localVp, resources); } catch { /* ignore */ }
-    finally { setReporting(false); }
-  }, [localVp, resources, sendReport]);
-
-  // ── Derived values ───────────────────────────────────────────────────────
-
-  const phase         = gameState?.phase ?? GamePhase.LOBBY;
-  const myId          = playerId ?? 0;
-  const numPlayers    = gameState?.numPlayers ?? 0;
-  const currentPlayer = gameState?.currentPlayer ?? 0;
-  const myTurn        = gameState != null && currentPlayer === myId;
-  const hasRolled     = gameState?.hasRolled ?? false;
-  const isGameOver    = phase === GamePhase.GAME_OVER;
-
-  const connectedMask  = gameState?.connectedMask ?? 0;
-  const connectedCount = [0, 1, 2, 3].filter(i => Boolean(connectedMask & (1 << i))).length;
-
-  const showResources =
-    phase === GamePhase.INITIAL_PLACEMENT ||
-    phase === GamePhase.PLAYING ||
-    phase === GamePhase.ROBBER;
-
-  const [btnL, btnC, btnR] = buttonsForPhase(phase, myTurn, hasRolled, connectedCount);
-
-  // ── Render ───────────────────────────────────────────────────────────────
-
-  return (
-    <View style={[s.root, { backgroundColor: theme.background }]}>
-      <SafeAreaView style={s.safeArea} edges={['top', 'left', 'right']}>
-
-        {/* Header */}
-        <View style={[s.header, { borderBottomColor: theme.backgroundElement }]}>
-          <View style={s.headerLeft}>
-            <Text style={[s.playerName, { color: theme.text }]}>
-              Player {myId + 1}
-            </Text>
-            <View style={[s.phaseBadge, { backgroundColor: theme.backgroundElement }]}>
-              <Text style={[s.phaseText, { color: theme.textSecondary }]}>
-                {PHASE_LABEL[phase]}
-              </Text>
-            </View>
-          </View>
-          <Pressable
-            onPress={() => disconnect()}
-            hitSlop={12}
-            style={({ pressed }) => [s.disconnectBtn, { opacity: pressed ? 0.6 : 1 }]}>
-            <Text style={[s.disconnectText, { color: theme.textSecondary }]}>✕</Text>
-          </Pressable>
-        </View>
-
-        {/* Scrollable content */}
-        <ScrollView
-          style={s.scroll}
-          contentContainerStyle={s.scrollContent}
-          showsVerticalScrollIndicator={false}>
-
-          {/* Phase-specific hero */}
-          <PhaseHero
-            gameState={gameState}
-            phase={phase}
-            myId={myId}
-            myTurn={myTurn}
-            numPlayers={numPlayers}
-            currentPlayer={currentPlayer}
-            hasRolled={hasRolled}
-            connectedCount={connectedCount}
-            theme={theme}
-          />
-
-          {/* Resources (placement + playing + robber only) */}
-          {showResources && (
-            <View style={s.section}>
-              <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Resources</Text>
-              <View style={[s.resourcesCard, { backgroundColor: theme.backgroundElement }]}>
-                {RESOURCES.map(res => (
-                  <View key={res.key} style={s.resourceRow}>
-                    <Text style={s.resourceEmoji}>{res.emoji}</Text>
-                    <Text style={[s.resourceLabel, { color: theme.text }]}>{res.label}</Text>
-                    <View style={s.resourceControls}>
-                      <Stepper onPress={() => setResources(r => ({ ...r, [res.key]: Math.max(0, r[res.key] - 1) }))} label="−" bg={theme.background} fg={theme.text} />
-                      <Text style={[s.resourceCount, { color: theme.text }]}>{resources[res.key]}</Text>
-                      <Stepper onPress={() => setResources(r => ({ ...r, [res.key]: r[res.key] + 1 }))}           label="+" bg={theme.background} fg={theme.text} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Victory points (playing / robber / game-over) */}
-          {(showResources || isGameOver) && (
-            <View style={s.section}>
-              <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Victory Points</Text>
-              {/* My VP stepper */}
-              <View style={[s.vpEditor, { backgroundColor: theme.backgroundElement }]}>
-                <Stepper onPress={() => setLocalVp(v => Math.max(0, v - 1))}      label="−" bg={theme.background} fg={theme.text} />
-                <View style={s.vpEditorCenter}>
-                  <Text style={[s.vpEditorLabel, { color: theme.textSecondary }]}>My VP</Text>
-                  <Text style={[s.vpEditorValue, { color: theme.primary }]}>{localVp}</Text>
-                </View>
-                <Stepper onPress={() => setLocalVp(v => Math.min(20, v + 1))}     label="+" bg={theme.background} fg={theme.text} />
-              </View>
-              <Pressable
-                onPress={handleReport}
-                disabled={reporting}
-                style={({ pressed }) => [
-                  s.reportBtn,
-                  { backgroundColor: theme.primary, opacity: pressed || reporting ? 0.6 : 1 },
-                ]}>
-                <Text style={s.reportBtnText}>{reporting ? 'Sending…' : 'Report to Board'}</Text>
-              </Pressable>
-
-              {/* Scoreboard from board */}
-              {numPlayers > 0 && gameState && (
-                <View style={[s.vpRow, { backgroundColor: theme.backgroundElement }]}>
-                  {Array.from({ length: numPlayers }, (_, i) => {
-                    const isMe     = i === myId;
-                    const isWinner = isGameOver && gameState.winnerId === i;
-                    return (
-                      <View
-                        key={i}
-                        style={[
-                          s.vpCell,
-                          isMe && { backgroundColor: theme.backgroundSelected, borderRadius: 10 },
-                        ]}>
-                        {isWinner && <Text style={s.trophyIcon}>🏆</Text>}
-                        <Text style={[s.vpCellLabel, { color: theme.textSecondary }]}>
-                          P{i + 1}{isMe ? ' ●' : ''}
-                        </Text>
-                        <Text style={[s.vpCellValue, { color: theme.text }]}>
-                          {gameState.vp[i] ?? 0}
-                        </Text>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          )}
-
-          <Text style={[s.connectedLabel, { color: theme.textSecondary }]}>
-            {connectedName ?? ''}
-          </Text>
-        </ScrollView>
-
-        {/* Action bar */}
-        <ActionBar
-          btnLeft={btnL}
-          btnCenter={btnC}
-          btnRight={btnR}
-          onAction={handleAction}
-          primaryColor={theme.primary}
-          surfaceColor={theme.backgroundElement}
-          textColor={theme.text}
-          mutedColor={theme.textSecondary}
-        />
-      </SafeAreaView>
-    </View>
-  );
-}
-
-// ── Snake draft display helper ────────────────────────────────────────────
-
-/** Returns ordered slots for the current round's snake order strip.
- *  We don't know the first player from the proto alone, so we reconstruct a
- *  plausible order: in the forward round, the current player is first in the
- *  remaining sequence; in the reverse round, the current player is the head
- *  of the reverse sequence.  The strip shows all N players in turn order with
- *  the current slot highlighted.
- *  numPlayers: 2..4, currentPlayer: 0-based, isForward: round 1 vs round 2. */
 function buildSnakeDisplay(
   numPlayers: number,
   currentPlayer: number,
   isForward: boolean,
 ): { playerId: number; isCurrent: boolean }[] {
-  const slots: { playerId: number; isCurrent: boolean }[] = [];
-  for (let i = 0; i < numPlayers; i++) {
+  return Array.from({ length: numPlayers }, (_, i) => {
     const id = isForward
       ? (currentPlayer + i) % numPlayers
       : (currentPlayer + numPlayers - i) % numPlayers;
-    slots.push({ playerId: id, isCurrent: i === 0 });
-  }
-  return slots;
+    return { playerId: id, isCurrent: i === 0 };
+  });
+}
+
+// ── Animation helpers ─────────────────────────────────────────────────────
+
+/** Plays a fade + slide-up entrance whenever `triggerKey` changes. */
+function FadeSlideIn({ children, triggerKey }: {
+  children: React.ReactNode;
+  triggerKey: string | number;
+}) {
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(18);
+
+  useEffect(() => {
+    opacity.value = 0;
+    translateY.value = 18;
+    opacity.value = withTiming(1, { duration: 280 });
+    translateY.value = withSpring(0, { damping: 18, stiffness: 180 });
+  }, [triggerKey]);
+
+  const animStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  return <Animated.View style={animStyle}>{children}</Animated.View>;
+}
+
+/** Turn chip that pulses when it becomes the player's turn. */
+function TurnChip({ myTurn, currentPlayer, theme }: {
+  myTurn: boolean;
+  currentPlayer: number;
+  theme: ReturnType<typeof import('@/hooks/use-theme').useTheme>;
+}) {
+  const scale = useSharedValue(1);
+  const prevMyTurn = useRef(false);
+
+  useEffect(() => {
+    if (myTurn && !prevMyTurn.current) {
+      scale.value = withSequence(
+        withSpring(1.1, { damping: 5, stiffness: 300 }),
+        withSpring(1, { damping: 12, stiffness: 200 }),
+      );
+    }
+    prevMyTurn.current = myTurn;
+  }, [myTurn]);
+
+  const chipStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Animated.View style={[s.turnChip, { backgroundColor: myTurn ? theme.primary : theme.backgroundElement }, chipStyle]}>
+      <Text style={[s.turnChipText, { color: myTurn ? '#fff' : theme.text }]}>
+        {myTurn ? '⬤  Your turn' : `Player ${currentPlayer + 1}'s turn`}
+      </Text>
+    </Animated.View>
+  );
+}
+
+/** Shuffles through random die faces then springs to the real result when hasRolled becomes true. */
+function AnimatedDiceDisplay({ die1, die2, total, hasRolled, theme }: {
+  die1: number;
+  die2: number;
+  total: number;
+  hasRolled: boolean;
+  theme: ReturnType<typeof import('@/hooks/use-theme').useTheme>;
+}) {
+  const [d1, setD1] = useState(die1);
+  const [d2, setD2] = useState(die2);
+  const scale = useSharedValue(1);
+  const isFirst = useRef(true);
+  const prevHasRolled = useRef(hasRolled);
+
+  useEffect(() => {
+    if (isFirst.current) {
+      isFirst.current = false;
+      prevHasRolled.current = hasRolled;
+      setD1(die1);
+      setD2(die2);
+      return;
+    }
+    const wasRolled = prevHasRolled.current;
+    prevHasRolled.current = hasRolled;
+    if (hasRolled && !wasRolled && die1 > 0 && die2 > 0) {
+      let count = 0;
+      const interval = setInterval(() => {
+        setD1(Math.ceil(Math.random() * 6));
+        setD2(Math.ceil(Math.random() * 6));
+        count++;
+        if (count >= 10) {
+          clearInterval(interval);
+          setD1(die1);
+          setD2(die2);
+          scale.value = 0.7;
+          scale.value = withSpring(1, { damping: 8, stiffness: 100 });
+        }
+      }, 75);
+      return () => clearInterval(interval);
+    }
+    if (!hasRolled) {
+      setD1(die1);
+      setD2(die2);
+    }
+  }, [hasRolled, die1, die2]);
+
+  const diceStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
+      <Animated.Text style={[s.diceDisplay, { color: theme.text }, diceStyle]}>
+        {DIE_FACES[d1]}  {DIE_FACES[d2]}
+      </Animated.Text>
+      <Animated.Text style={[s.diceTotal, { color: theme.primary }, diceStyle]}>
+        {d1 + d2}
+      </Animated.Text>
+    </View>
+  );
+}
+
+/** Big number token that bounces in each time the reveal number changes. */
+function RevealHero({ gameState, theme }: {
+  gameState: import('@/services/proto').BoardState | null;
+  theme: ReturnType<typeof import('@/hooks/use-theme').useTheme>;
+}) {
+  const revealNum = gameState?.revealNumber ?? 0;
+  const idx       = REVEAL_ORDER.indexOf(revealNum);
+  const placed    = idx >= 0 ? idx : REVEAL_ORDER.length;
+  const scale     = useSharedValue(1);
+  const prevNum   = useRef(revealNum);
+
+  useEffect(() => {
+    if (revealNum !== prevNum.current && revealNum > 0) {
+      scale.value = withSequence(
+        withSpring(1.3, { damping: 5, stiffness: 300 }),
+        withSpring(1, { damping: 10, stiffness: 200 }),
+      );
+    }
+    prevNum.current = revealNum;
+  }, [revealNum]);
+
+  const numStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
+      <Text style={[s.heroSub, { color: theme.textSecondary }]}>Placing number token</Text>
+      <Animated.Text style={[s.revealNumber, { color: theme.primary }, numStyle]}>
+        {revealNum > 0 ? revealNum : '—'}
+      </Animated.Text>
+      <View style={s.revealProgress}>
+        {REVEAL_ORDER.map((n, i) => (
+          <View
+            key={n}
+            style={[
+              s.revealPip,
+              {
+                backgroundColor: i < placed ? theme.primary : i === placed ? theme.text : theme.background,
+                borderColor: i <= placed ? theme.primary : theme.textSecondary,
+              },
+            ]}
+          />
+        ))}
+      </View>
+      <Text style={[s.heroSub, { color: theme.textSecondary }]}>
+        {placed} of {REVEAL_ORDER.length} placed
+      </Text>
+    </View>
+  );
+}
+
+/** Player slot that pops when that player connects. */
+function LobbySlot({ index, connected, isMe, theme }: {
+  index: number;
+  connected: boolean;
+  isMe: boolean;
+  theme: ReturnType<typeof import('@/hooks/use-theme').useTheme>;
+}) {
+  const scale = useSharedValue(1);
+  const prevConnected = useRef(connected);
+
+  useEffect(() => {
+    if (connected && !prevConnected.current) {
+      scale.value = withSequence(
+        withSpring(1.12, { damping: 5, stiffness: 300 }),
+        withSpring(1, { damping: 12, stiffness: 200 }),
+      );
+    }
+    prevConnected.current = connected;
+  }, [connected]);
+
+  const slotStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        s.lobbySlot,
+        {
+          backgroundColor: connected ? theme.primary : theme.background,
+          borderColor: connected ? theme.primary : theme.textSecondary,
+        },
+        slotStyle,
+      ]}>
+      <Text style={[s.lobbySlotText, { color: connected ? '#fff' : theme.textSecondary }]}>
+        P{index + 1}
+      </Text>
+      <Text style={[s.lobbySlotSub, { color: connected ? 'rgba(255,255,255,0.8)' : theme.textSecondary }]}>
+        {isMe ? 'you' : connected ? '●' : '○'}
+      </Text>
+    </Animated.View>
+  );
 }
 
 // ── Phase hero cards ──────────────────────────────────────────────────────
@@ -358,37 +349,26 @@ function PhaseHero(p: HeroProps) {
 
   switch (phase) {
 
-    // ── Lobby ──────────────────────────────────────────────────────────────
     case GamePhase.LOBBY: {
       const mask = gameState?.connectedMask ?? 0;
       const connected = [0, 1, 2, 3].map(i => Boolean(mask & (1 << i)));
-      const count     = connectedCount;
-      const needMore  = count < 2;
+      const needMore  = connectedCount < 2;
       return (
         <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
           <Text style={[s.heroTitle, { color: theme.text }]}>Waiting for players</Text>
           <View style={s.lobbyGrid}>
             {[0, 1, 2, 3].map(i => (
-              <View
+              <LobbySlot
                 key={i}
-                style={[
-                  s.lobbySlot,
-                  {
-                    backgroundColor: connected[i] ? theme.primary : theme.background,
-                    borderColor: connected[i] ? theme.primary : theme.textSecondary,
-                  },
-                ]}>
-                <Text style={[s.lobbySlotText, { color: connected[i] ? '#fff' : theme.textSecondary }]}>
-                  P{i + 1}
-                </Text>
-                <Text style={[s.lobbySlotSub, { color: connected[i] ? 'rgba(255,255,255,0.8)' : theme.textSecondary }]}>
-                  {i === myId ? 'you' : connected[i] ? '●' : '○'}
-                </Text>
-              </View>
+                index={i}
+                connected={connected[i]}
+                isMe={i === myId}
+                theme={theme}
+              />
             ))}
           </View>
           <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-            {count} of 4 connected
+            {connectedCount} of 4 connected
           </Text>
           {needMore && (
             <Text style={[s.lobbyHint, { color: theme.textSecondary }]}>
@@ -399,68 +379,27 @@ function PhaseHero(p: HeroProps) {
       );
     }
 
-    // ── Board Setup ────────────────────────────────────────────────────────
     case GamePhase.BOARD_SETUP:
       return (
         <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
           <Text style={s.heroEmoji}>🗺</Text>
           <Text style={[s.heroTitle, { color: theme.text }]}>Board Ready</Text>
           <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-            The board has been generated.
-          </Text>
-          <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-            Tap “Start Reveal” when everyone is ready to step through the number tokens.
+            Tap "Start Reveal" when everyone is ready to step through the number tokens.
           </Text>
         </View>
       );
 
-    // ── Number Reveal ──────────────────────────────────────────────────────
-    case GamePhase.NUMBER_REVEAL: {
-      const revealNum = gameState?.revealNumber ?? 0;
-      const idx       = REVEAL_ORDER.indexOf(revealNum);
-      const placed    = idx >= 0 ? idx : REVEAL_ORDER.length;
-      return (
-        <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[s.heroSub, { color: theme.textSecondary }]}>Placing number token</Text>
-          <Text style={[s.revealNumber, { color: theme.primary }]}>
-            {revealNum > 0 ? revealNum : '—'}
-          </Text>
-          {/* Progress pip row */}
-          <View style={s.revealProgress}>
-            {REVEAL_ORDER.map((n, i) => (
-              <View
-                key={n}
-                style={[
-                  s.revealPip,
-                  {
-                    backgroundColor:
-                      i < placed
-                        ? theme.primary
-                        : i === placed
-                        ? theme.text
-                        : theme.background,
-                    borderColor: i <= placed ? theme.primary : theme.textSecondary,
-                  },
-                ]}
-              />
-            ))}
-          </View>
-          <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-            {placed} of {REVEAL_ORDER.length} placed
-          </Text>
-        </View>
-      );
-    }
+    case GamePhase.NUMBER_REVEAL:
+      return <RevealHero gameState={gameState} theme={theme} />;
 
-    // ── Initial Placement ──────────────────────────────────────────────────
     case GamePhase.INITIAL_PLACEMENT: {
-      const round       = gameState?.setupRound ?? 1;
-      const isForward   = round <= 1;
-      const direction   = isForward ? '→ forward' : '← reverse';
-      const turnLabel   = `Round ${round} of 2  ·  ${direction}`;
+      const round     = gameState?.setupRound ?? 1;
+      const isForward = round <= 1;
+      const direction = isForward ? '→ forward' : '← reverse';
       return (
         <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[s.heroSub, { color: theme.textSecondary }]}>{turnLabel}</Text>
+          <Text style={[s.heroSub, { color: theme.textSecondary }]}>{`Round ${round} of 2  ·  ${direction}`}</Text>
           {myTurn ? (
             <>
               <Text style={[s.heroTitle, { color: theme.primary }]}>Your turn!</Text>
@@ -481,16 +420,8 @@ function PhaseHero(p: HeroProps) {
           {numPlayers >= 2 && (
             <View style={s.snakeRow}>
               {buildSnakeDisplay(numPlayers, currentPlayer, isForward).map((slot, i) => (
-                <View
-                  key={i}
-                  style={[
-                    s.snakeSlot,
-                    { borderColor: slot.isCurrent ? theme.primary : theme.textSecondary },
-                  ]}>
-                  <Text style={[
-                    s.snakeSlotText,
-                    { color: slot.isCurrent ? theme.primary : theme.textSecondary },
-                  ]}>
+                <View key={i} style={[s.snakeSlot, { borderColor: slot.isCurrent ? theme.primary : theme.textSecondary }]}>
+                  <Text style={[s.snakeSlotText, { color: slot.isCurrent ? theme.primary : theme.textSecondary }]}>
                     P{slot.playerId + 1}
                   </Text>
                 </View>
@@ -501,38 +432,19 @@ function PhaseHero(p: HeroProps) {
       );
     }
 
-    // ── Playing ────────────────────────────────────────────────────────────
     case GamePhase.PLAYING: {
       const die1  = gameState?.die1 ?? 0;
       const die2  = gameState?.die2 ?? 0;
       const total = die1 + die2;
       return (
         <View style={s.playingHero}>
-          {/* Turn indicator chip */}
-          <View
-            style={[
-              s.turnChip,
-              { backgroundColor: myTurn ? theme.primary : theme.backgroundElement },
-            ]}>
-            <Text style={[s.turnChipText, { color: myTurn ? '#fff' : theme.text }]}>
-              {myTurn ? '⬤  Your turn' : `Player ${currentPlayer + 1}'s turn`}
-            </Text>
-          </View>
-
-          {/* Dice display */}
+          <TurnChip myTurn={myTurn} currentPlayer={currentPlayer} theme={theme} />
           {hasRolled && total > 0 ? (
-            <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
-              <Text style={[s.diceDisplay, { color: theme.text }]}>
-                {DIE_FACES[die1]}  {DIE_FACES[die2]}
-              </Text>
-              <Text style={[s.diceTotal, { color: theme.primary }]}>{total}</Text>
-            </View>
+            <AnimatedDiceDisplay die1={die1} die2={die2} total={total} hasRolled={hasRolled} theme={theme} />
           ) : myTurn ? (
             <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
               <Text style={s.heroEmoji}>🎲</Text>
-              <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-                Tap Roll Dice to start your turn
-              </Text>
+              <Text style={[s.heroSub, { color: theme.textSecondary }]}>Tap Roll Dice to start your turn</Text>
             </View>
           ) : (
             <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
@@ -545,7 +457,6 @@ function PhaseHero(p: HeroProps) {
       );
     }
 
-    // ── Robber ─────────────────────────────────────────────────────────────
     case GamePhase.ROBBER:
       return (
         <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
@@ -559,7 +470,6 @@ function PhaseHero(p: HeroProps) {
         </View>
       );
 
-    // ── Game Over ──────────────────────────────────────────────────────────
     case GamePhase.GAME_OVER: {
       const winner = gameState?.winnerId;
       return (
@@ -587,66 +497,408 @@ function PhaseHero(p: HeroProps) {
 // ── Action bar ────────────────────────────────────────────────────────────
 
 interface ActionBarProps {
-  btnLeft:   ButtonSpec | null;
-  btnCenter: ButtonSpec | null;
-  btnRight:  ButtonSpec | null;
+  buttons: ButtonSpec[];
   onAction: (a: PlayerAction) => void;
+  pendingAction: PlayerAction | null;
   primaryColor: string;
   surfaceColor: string;
   textColor: string;
   mutedColor: string;
 }
 
-function ActionBar({ btnLeft, btnCenter, btnRight, onAction, primaryColor, surfaceColor, textColor, mutedColor }: ActionBarProps) {
-  if (!btnLeft && !btnCenter && !btnRight) return null;
+function ActionBar({ buttons, onAction, pendingAction, primaryColor, surfaceColor, textColor, mutedColor }: ActionBarProps) {
+  if (buttons.length === 0) return null;
   return (
     <SafeAreaView edges={['bottom']} style={[s.actionBar, { borderTopColor: surfaceColor }]}>
       <View style={s.actionBarInner}>
-        <ActionBtn spec={btnLeft}   onAction={onAction} primary={primaryColor} surface={surfaceColor} text={textColor} muted={mutedColor} />
-        <ActionBtn spec={btnCenter} onAction={onAction} primary={primaryColor} surface={surfaceColor} text={textColor} muted={mutedColor} />
-        <ActionBtn spec={btnRight}  onAction={onAction} primary={primaryColor} surface={surfaceColor} text={textColor} muted={mutedColor} />
+        {buttons.map(spec => {
+          const isPending = pendingAction === spec.action;
+          const disabled  = !spec.enabled || pendingAction !== null;
+          const bg        = spec.primary ? primaryColor : surfaceColor;
+          const fg        = spec.primary ? '#fff' : disabled ? mutedColor : textColor;
+          return (
+            <Pressable
+              key={spec.action}
+              onPress={() => onAction(spec.action)}
+              disabled={disabled}
+              style={({ pressed }) => [
+                s.actionBtn,
+                { backgroundColor: bg, opacity: disabled ? 0.35 : pressed ? 0.75 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
+              ]}>
+              <View style={s.actionBtnInner}>
+                {isPending ? (
+                  <Text style={[s.actionBtnText, { color: fg }]}>…</Text>
+                ) : (
+                  <>
+                    {spec.sfSymbol && (
+                      <SFSymbolIcon name={spec.sfSymbol as any} size={18} color={fg} weight="semibold" />
+                    )}
+                    <Text style={[s.actionBtnText, { color: fg }]} numberOfLines={1}>
+                      {spec.label}
+                    </Text>
+                  </>
+                )}
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
     </SafeAreaView>
   );
 }
 
-interface ActionBtnProps {
-  spec: ButtonSpec | null;
-  onAction: (a: PlayerAction) => void;
-  primary: string;
-  surface: string;
-  text: string;
-  muted: string;
-}
-
-function ActionBtn({ spec, onAction, primary, surface, text, muted }: ActionBtnProps) {
-  if (!spec) return <View style={s.actionBtnPlaceholder} />;
-  const disabled = !spec.enabled;
-  const bg       = spec.primary ? primary : surface;
-  const fg       = spec.primary ? '#fff'  : disabled ? muted : text;
-  return (
-    <Pressable
-      onPress={() => onAction(spec.action)}
-      disabled={disabled}
-      style={({ pressed }) => [
-        s.actionBtn,
-        { backgroundColor: bg, opacity: disabled ? 0.3 : pressed ? 0.75 : 1 },
-      ]}>
-      <Text style={[s.actionBtnText, { color: fg }]}>{spec.label}</Text>
-    </Pressable>
-  );
-}
-
 // ── Stepper ───────────────────────────────────────────────────────────────
 
-function Stepper({ onPress, label, bg, fg }: { onPress: () => void; label: string; bg: string; fg: string }) {
+function Stepper({ onPress, decrement, bg, fg }: { onPress: () => void; decrement?: boolean; bg: string; fg: string }) {
   return (
     <Pressable
       onPress={onPress}
       hitSlop={10}
       style={({ pressed }) => [s.stepper, { backgroundColor: bg, opacity: pressed ? 0.6 : 1 }]}>
-      <Text style={[s.stepperText, { color: fg }]}>{label}</Text>
+      <SFSymbolIcon
+        name={decrement ? 'minus' : 'plus'}
+        size={16}
+        color={fg}
+        weight="semibold"
+        fallback={decrement ? '−' : '+'}
+      />
     </Pressable>
+  );
+}
+
+// ── Sync indicator ────────────────────────────────────────────────────────
+
+function SyncIndicator({ syncing, lastSynced, theme }: {
+  syncing: boolean;
+  lastSynced: number | null;
+  theme: ReturnType<typeof import('@/hooks/use-theme').useTheme>;
+}) {
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (syncing) {
+      opacity.value = withRepeat(
+        withSequence(
+          withTiming(1, { duration: 400 }),
+          withTiming(0.3, { duration: 400 }),
+        ),
+        -1,
+        false,
+      );
+    } else {
+      opacity.value = withTiming(0.7, { duration: 200 });
+    }
+  }, [syncing]);
+
+  const animStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
+  if (!syncing && !lastSynced) return null;
+
+  return (
+    <Animated.View style={[s.syncRow, animStyle]}>
+      <SFSymbolIcon name="arrow.triangle.2.circlepath" size={13} color={theme.textSecondary} fallback="↻" />
+      <Text style={[s.syncText, { color: theme.textSecondary }]}>
+        {syncing ? 'Syncing…' : 'Synced'}
+      </Text>
+    </Animated.View>
+  );
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────
+
+export default function GameScreen() {
+  const theme = useTheme();
+  const {
+    connectionState,
+    connectedName,
+    playerId,
+    gameState,
+    sendAction,
+    sendReport,
+    disconnect,
+  } = useBle();
+
+  const [localVp, setLocalVp] = useState(0);
+  const [resources, setResources] = useState<ResourceCounts>({
+    lumber: 0, wool: 0, grain: 0, brick: 0, ore: 0,
+  });
+  const [pendingAction, setPendingAction] = useState<PlayerAction | null>(null);
+  const [showBoard, setShowBoard] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSynced, setLastSynced] = useState<number | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vpScale = useSharedValue(1);
+  const prevVpRef = useRef(0);
+
+  // Navigate away when disconnected.
+  useEffect(() => {
+    if (connectionState === 'idle') router.replace('/');
+  }, [connectionState]);
+
+  // Restore VP and resources from boardState when first received (app re-open / reconnect).
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!restoredRef.current && gameState && playerId != null) {
+      const savedVp = gameState.vp[playerId] ?? 0;
+      if (savedVp > 0) setLocalVp(savedVp);
+      setResources({
+        lumber: gameState.resLumber[playerId] ?? 0,
+        wool:   gameState.resWool[playerId]   ?? 0,
+        grain:  gameState.resGrain[playerId]  ?? 0,
+        brick:  gameState.resBrick[playerId]  ?? 0,
+        ore:    gameState.resOre[playerId]    ?? 0,
+      });
+      restoredRef.current = true;
+    }
+  }, [gameState, playerId]);
+
+  // Debounced auto-sync when resources or VP change.
+  const scheduleSync = useCallback(
+    (vp: number, res: ResourceCounts) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(async () => {
+        setSyncing(true);
+        try {
+          await sendReport(vp, res);
+          setLastSynced(Date.now());
+        } catch {
+          /* silent – next change will retry */
+        } finally {
+          setSyncing(false);
+        }
+      }, 1200);
+    },
+    [sendReport],
+  );
+
+  const adjustVp = useCallback(
+    (delta: number) => {
+      setLocalVp(v => {
+        const next = Math.max(0, Math.min(20, v + delta));
+        scheduleSync(next, resources);
+        return next;
+      });
+    },
+    [resources, scheduleSync],
+  );
+
+  const adjustResource = useCallback(
+    (key: ResKey, delta: number) => {
+      setResources(r => {
+        const next = { ...r, [key]: Math.max(0, r[key] + delta) };
+        scheduleSync(localVp, next);
+        return next;
+      });
+    },
+    [localVp, scheduleSync],
+  );
+
+  const handleAction = useCallback(
+    async (action: PlayerAction) => {
+      setPendingAction(action);
+      try { await sendAction(action); } catch { /* ignore */ }
+      finally { setPendingAction(null); }
+    },
+    [sendAction],
+  );
+
+  // Bounce the VP display when the count changes.
+  useEffect(() => {
+    if (localVp !== prevVpRef.current) {
+      prevVpRef.current = localVp;
+      vpScale.value = withSequence(
+        withSpring(1.35, { damping: 5, stiffness: 400 }),
+        withSpring(1, { damping: 10, stiffness: 200 }),
+      );
+    }
+  }, [localVp]);
+
+  const vpAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: vpScale.value }],
+  }));
+
+  // ── Derived values ─────────────────────────────────────────────────────
+
+  const phase         = gameState?.phase ?? GamePhase.LOBBY;
+  const myId          = playerId ?? 0;
+  const numPlayers    = gameState?.numPlayers ?? 0;
+  const currentPlayer = gameState?.currentPlayer ?? 0;
+  const myTurn        = gameState != null && currentPlayer === myId;
+  const hasRolled     = gameState?.hasRolled ?? false;
+  const isGameOver    = phase === GamePhase.GAME_OVER;
+
+  const connectedMask  = gameState?.connectedMask ?? 0;
+  const connectedCount = [0, 1, 2, 3].filter(i => Boolean(connectedMask & (1 << i))).length;
+
+  const showResources =
+    phase === GamePhase.PLAYING ||
+    phase === GamePhase.ROBBER;
+
+  const buttons = buttonsForPhase(phase, myTurn, hasRolled, connectedCount);
+  const boardAvailable = (gameState?.tiles?.length ?? 0) > 0;
+
+  const handleDisconnect = useCallback(() => {
+    const activePhases: GamePhase[] = [
+      GamePhase.BOARD_SETUP,
+      GamePhase.NUMBER_REVEAL,
+      GamePhase.INITIAL_PLACEMENT,
+      GamePhase.PLAYING,
+      GamePhase.ROBBER,
+    ];
+    if (activePhases.includes(phase)) {
+      Alert.alert(
+        'Leave Game?',
+        'The game is in progress. Are you sure you want to disconnect?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Leave', style: 'destructive', onPress: () => disconnect() },
+        ],
+      );
+    } else {
+      disconnect();
+    }
+  }, [disconnect, phase]);
+
+  // ── Render ─────────────────────────────────────────────────────────────
+
+  return (
+    <View style={[s.root, { backgroundColor: theme.background }]}>
+      <SafeAreaView style={s.safeArea} edges={['top', 'left', 'right']}>
+
+        {/* Header */}
+        <View style={[s.header, { borderBottomColor: theme.backgroundElement }]}>
+          <View style={s.headerLeft}>
+            <Text style={[s.playerName, { color: theme.text }]}>Player {myId + 1}</Text>
+            <View style={[s.phaseBadge, { backgroundColor: theme.backgroundElement }]}>
+              <Text style={[s.phaseText, { color: theme.textSecondary }]}>{PHASE_LABEL[phase]}</Text>
+            </View>
+          </View>
+          <View style={s.headerRight}>
+            {boardAvailable && (
+              <Pressable
+                onPress={() => setShowBoard(true)}
+                hitSlop={12}
+                style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
+                <SFSymbolIcon name="map" size={22} color={theme.text} fallback="🗺" />
+              </Pressable>
+            )}
+            <Pressable
+              onPress={() => handleDisconnect()}
+              hitSlop={12}
+              style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
+              <SFSymbolIcon name="xmark.circle" size={22} color={theme.textSecondary} fallback="✕" />
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Scrollable content */}
+        <ScrollView
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
+          showsVerticalScrollIndicator={false}>
+
+          <FadeSlideIn triggerKey={phase}>
+            <PhaseHero
+              gameState={gameState}
+              phase={phase}
+              myId={myId}
+              myTurn={myTurn}
+              numPlayers={numPlayers}
+              currentPlayer={currentPlayer}
+              hasRolled={hasRolled}
+              connectedCount={connectedCount}
+              theme={theme}
+            />
+          </FadeSlideIn>
+
+          {/* Resources */}
+          {showResources && (
+            <View style={s.section}>
+              <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Resources</Text>
+              <View style={[s.resourcesCard, { backgroundColor: theme.backgroundElement }]}>
+                {RESOURCES.map(res => (
+                  <View key={res.key} style={s.resourceRow}>
+                    <Text style={s.resourceEmoji}>{res.emoji}</Text>
+                    <Text style={[s.resourceLabel, { color: theme.text }]}>{res.label}</Text>
+                    <View style={s.resourceControls}>
+                      <Stepper decrement onPress={() => adjustResource(res.key, -1)} bg={theme.background} fg={theme.text} />
+                      <Text style={[s.resourceCount, { color: theme.text }]}>{resources[res.key]}</Text>
+                      <Stepper onPress={() => adjustResource(res.key, 1)} bg={theme.background} fg={theme.text} />
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Victory points */}
+          {(showResources || isGameOver) && (
+            <View style={s.section}>
+              <View style={s.sectionHeader}>
+                <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Victory Points</Text>
+                <SyncIndicator syncing={syncing} lastSynced={lastSynced} theme={theme} />
+              </View>
+              <View style={[s.vpEditor, { backgroundColor: theme.backgroundElement }]}>
+                <Stepper decrement onPress={() => adjustVp(-1)} bg={theme.background} fg={theme.text} />
+                <View style={s.vpEditorCenter}>
+                  <Text style={[s.vpEditorLabel, { color: theme.textSecondary }]}>My VP</Text>
+                  <Animated.Text style={[s.vpEditorValue, { color: theme.primary }, vpAnimStyle]}>{localVp}</Animated.Text>
+                </View>
+                <Stepper onPress={() => adjustVp(1)} bg={theme.background} fg={theme.text} />
+              </View>
+
+              {/* Scoreboard — full only at game over; during game show only own VP */}
+              {numPlayers > 0 && gameState && isGameOver && (
+                <View style={[s.vpRow, { backgroundColor: theme.backgroundElement }]}>
+                  {Array.from({ length: numPlayers }, (_, i) => {
+                    const isMe     = i === myId;
+                    const isWinner = gameState.winnerId === i;
+                    return (
+                      <View
+                        key={i}
+                        style={[
+                          s.vpCell,
+                          isMe && { backgroundColor: theme.backgroundSelected, borderRadius: 10 },
+                        ]}>
+                        {isWinner && <Text style={s.trophyIcon}>🏆</Text>}
+                        <Text style={[s.vpCellLabel, { color: theme.textSecondary }]}>
+                          {isMe ? 'You' : `P${i + 1}`}
+                        </Text>
+                        <Text style={[s.vpCellValue, { color: theme.text }]}>
+                          {isMe ? localVp : (gameState.vp[i] ?? 0)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          )}
+
+          <Text style={[s.connectedLabel, { color: theme.textSecondary }]}>
+            {connectedName ?? ''}
+          </Text>
+        </ScrollView>
+
+        {/* Action bar */}
+        <ActionBar
+          buttons={buttons}
+          onAction={handleAction}
+          pendingAction={pendingAction}
+          primaryColor={theme.primary}
+          surfaceColor={theme.backgroundElement}
+          textColor={theme.text}
+          mutedColor={theme.textSecondary}
+        />
+      </SafeAreaView>
+
+      {/* Board overview modal */}
+      <BoardOverview
+        visible={showBoard}
+        onClose={() => setShowBoard(false)}
+        boardState={gameState}
+      />
+    </View>
   );
 }
 
@@ -665,22 +917,27 @@ const s = StyleSheet.create({
     paddingVertical: Spacing.three,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerLeft:     { gap: Spacing.one },
-  playerName:     { fontSize: 20, fontWeight: '700' },
-  phaseBadge:     { alignSelf: 'flex-start', paddingHorizontal: Spacing.two, paddingVertical: 3, borderRadius: 6 },
-  phaseText:      { fontSize: 12, fontWeight: '600' },
-  disconnectBtn:  { padding: Spacing.two },
-  disconnectText: { fontSize: 20, fontWeight: '300' },
+  headerLeft:  { gap: Spacing.one },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  headerBtn:   { padding: Spacing.one },
+  playerName:  { fontSize: 20, fontWeight: '700' },
+  phaseBadge:  { alignSelf: 'flex-start', paddingHorizontal: Spacing.two, paddingVertical: 3, borderRadius: 6 },
+  phaseText:   { fontSize: 12, fontWeight: '600' },
 
   // Scroll
   scroll:        { flex: 1 },
   scrollContent: { padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },
 
   // Generic section
-  section:      { gap: Spacing.two },
-  sectionLabel: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
+  section:       { gap: Spacing.two },
+  sectionLabel:  { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
-  // Hero card (used by most phases)
+  // Sync indicator
+  syncRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  syncText: { fontSize: 12 },
+
+  // Hero card
   heroCard: {
     borderRadius: 20,
     padding: Spacing.four,
@@ -692,31 +949,18 @@ const s = StyleSheet.create({
   heroSub:   { fontSize: 15, textAlign: 'center', lineHeight: 22 },
 
   // Lobby
-  lobbyGrid: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-    marginVertical: Spacing.two,
-  },
+  lobbyGrid: { flexDirection: 'row', gap: Spacing.two, marginVertical: Spacing.two },
   lobbySlot: {
-    flex: 1,
-    borderRadius: 14,
-    borderWidth: 2,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    gap: 4,
+    flex: 1, borderRadius: 14, borderWidth: 2,
+    paddingVertical: Spacing.three, alignItems: 'center', gap: 4,
   },
   lobbySlotText: { fontSize: 15, fontWeight: '700' },
   lobbySlotSub:  { fontSize: 12 },
   lobbyHint:     { fontSize: 13, textAlign: 'center', marginTop: 4 },
 
-  // Snake draft strip (setup phase)
+  // Snake draft strip
   snakeRow:      { flexDirection: 'row', gap: 6, marginTop: Spacing.two },
-  snakeSlot: {
-    borderWidth: 2,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
+  snakeSlot:     { borderWidth: 2, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
   snakeSlotText: { fontSize: 13, fontWeight: '700' },
 
   // Number reveal
@@ -727,22 +971,18 @@ const s = StyleSheet.create({
   // Playing phase
   playingHero: { gap: Spacing.two },
   turnChip: {
-    alignSelf: 'center',
-    borderRadius: 20,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one + 2,
+    alignSelf: 'center', borderRadius: 20,
+    paddingHorizontal: Spacing.three, paddingVertical: Spacing.one + 2,
   },
   turnChipText: { fontSize: 15, fontWeight: '700' },
-  diceDisplay: { fontSize: 60, lineHeight: 70 },
-  diceTotal:   { fontSize: 44, fontWeight: '900' },
+  diceDisplay:  { fontSize: 60, lineHeight: 70 },
+  diceTotal:    { fontSize: 44, fontWeight: '900' },
 
   // Resources card
   resourcesCard: { borderRadius: 16, padding: Spacing.three, gap: Spacing.two },
   resourceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingVertical: Spacing.one,
+    flexDirection: 'row', alignItems: 'center',
+    gap: Spacing.three, paddingVertical: Spacing.one,
   },
   resourceEmoji:    { fontSize: 22, width: 28, textAlign: 'center' },
   resourceLabel:    { fontSize: 15, fontWeight: '600', flex: 1 },
@@ -755,24 +995,19 @@ const s = StyleSheet.create({
 
   // VP editor
   vpEditor: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    borderRadius: 16,
-    padding: Spacing.three,
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-around', borderRadius: 16, padding: Spacing.three,
   },
   vpEditorCenter: { alignItems: 'center' },
   vpEditorLabel:  { fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
   vpEditorValue:  { fontSize: 52, fontWeight: '900', minWidth: 64, textAlign: 'center' },
-  reportBtn:      { borderRadius: 14, paddingVertical: Spacing.three, alignItems: 'center' },
-  reportBtnText:  { color: '#fff', fontSize: 16, fontWeight: '700' },
 
-  // VP row (scoreboard)
-  vpRow:      { flexDirection: 'row', borderRadius: 16, padding: Spacing.three, justifyContent: 'space-around' },
-  vpCell:     { alignItems: 'center', paddingVertical: Spacing.one, paddingHorizontal: Spacing.two, gap: 2 },
-  trophyIcon: { fontSize: 16 },
-  vpCellLabel:{ fontSize: 12, fontWeight: '600' },
-  vpCellValue:{ fontSize: 24, fontWeight: '800' },
+  // VP row (scoreboard — game over only)
+  vpRow:       { flexDirection: 'row', borderRadius: 16, padding: Spacing.three, justifyContent: 'space-around' },
+  vpCell:      { alignItems: 'center', paddingVertical: Spacing.one, paddingHorizontal: Spacing.two, gap: 2 },
+  trophyIcon:  { fontSize: 16 },
+  vpCellLabel: { fontSize: 12, fontWeight: '600' },
+  vpCellValue: { fontSize: 24, fontWeight: '800' },
 
   connectedLabel: { fontSize: 11, textAlign: 'center', marginTop: Spacing.two },
 
@@ -780,13 +1015,14 @@ const s = StyleSheet.create({
   actionBar:      { borderTopWidth: StyleSheet.hairlineWidth },
   actionBarInner: { flexDirection: 'row', padding: Spacing.three, gap: Spacing.two },
   actionBtn: {
-    flex: 1,
-    borderRadius: 14,
+    flex: 1, borderRadius: 14,
     paddingVertical: Spacing.three,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
     minHeight: 54,
   },
-  actionBtnPlaceholder: { flex: 1 },
-  actionBtnText:        { fontSize: 15, fontWeight: '700' },
+  actionBtnInner: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', gap: 6,
+  },
+  actionBtnText: { fontSize: 15, fontWeight: '700', textAlign: 'center' },
 });
