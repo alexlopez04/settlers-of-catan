@@ -49,6 +49,33 @@ export enum Biome {
   MOUNTAIN = 5,
 }
 
+// Mirrors firmware core::RejectReason.  0 = no rejection.
+export enum RejectReason {
+  NONE                  = 0,
+  OUT_OF_TURN           = 1,
+  WRONG_PHASE           = 2,
+  VERTEX_OCCUPIED       = 3,
+  TOO_CLOSE_TO_SETTLEMENT = 4,
+  ROAD_OCCUPIED         = 5,
+  ROAD_NOT_CONNECTED    = 6,
+  NOT_MY_SETTLEMENT     = 7,
+  ROBBER_SAME_TILE      = 8,
+  INVALID_INDEX         = 9,
+}
+
+export const REJECT_MESSAGES: Record<RejectReason, string> = {
+  [RejectReason.NONE]:                   '',
+  [RejectReason.OUT_OF_TURN]:            "It's not your turn",
+  [RejectReason.WRONG_PHASE]:            'Wrong game phase for that action',
+  [RejectReason.VERTEX_OCCUPIED]:        'That spot is already occupied',
+  [RejectReason.TOO_CLOSE_TO_SETTLEMENT]:'Too close to an existing settlement',
+  [RejectReason.ROAD_OCCUPIED]:          'That road is already placed',
+  [RejectReason.ROAD_NOT_CONNECTED]:     'Road must connect to your existing pieces',
+  [RejectReason.NOT_MY_SETTLEMENT]:      "That's not your settlement",
+  [RejectReason.ROBBER_SAME_TILE]:       'Move the robber to a different tile',
+  [RejectReason.INVALID_INDEX]:          'Invalid board position',
+};
+
 // ── Public types ────────────────────────────────────────────────────────────
 
 export interface Tile {
@@ -97,6 +124,12 @@ export interface BoardState {
   vertices: (VertexOwner | null)[];
   /** Length 72; index = edge id; null if empty. */
   edges: (EdgeOwner | null)[];
+  /**
+   * Single-shot placement rejection code for the current player.
+   * 0 (RejectReason.NONE) = no rejection; nonzero for exactly one broadcast
+   * cycle then cleared by the board.
+   */
+  lastRejectReason: RejectReason;
 }
 
 export interface PlayerInput {
@@ -280,6 +313,7 @@ function emptyBoardState(): BoardState {
     resOre:    [0, 0, 0, 0],
     vertices: Array.from({ length: 54 }, () => null),
     edges: Array.from({ length: 72 }, () => null),
+    lastRejectReason: RejectReason.NONE,
   };
 }
 
@@ -364,6 +398,7 @@ function decodeBoardStatePayload(buf: Uint8Array): BoardState | null {
         case 10: state.winnerId = v; break;
         case 11: state.robberTile = v; break;
         case 12: state.connectedMask = v; break;
+        case 25: state.lastRejectReason = v as RejectReason; break;
       }
     } else if (wireType === 2) {
       let len: number;

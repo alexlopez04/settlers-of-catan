@@ -80,6 +80,12 @@ typedef struct _catan_BoardState {
     uint32_t res_brick[4];
     pb_size_t res_ore_count;
     uint32_t res_ore[4];
+    /* Last placement rejection code for the current player.
+   0 = no rejection; set for one broadcast cycle then cleared by the board.
+   Values mirror firmware RejectReason: 1=OUT_OF_TURN 2=WRONG_PHASE
+   3=VERTEX_OCCUPIED 4=TOO_CLOSE 5=ROAD_OCCUPIED 6=ROAD_NOT_CONNECTED
+   7=NOT_MY_SETTLEMENT 8=ROBBER_SAME_TILE 9=INVALID_INDEX */
+    uint32_t last_reject_reason;
 } catan_BoardState;
 
 typedef struct _catan_PlayerInput {
@@ -134,10 +140,10 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0}
 #define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0}
 #define catan_PlayerPresence_init_default        {0, 0, 0, {"", "", "", ""}}
-#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0}
 #define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0}
 #define catan_PlayerPresence_init_zero           {0, 0, 0, {"", "", "", ""}}
 
@@ -201,7 +207,8 @@ X(a, STATIC,   REPEATED, UINT32,   res_lumber,       20) \
 X(a, STATIC,   REPEATED, UINT32,   res_wool,         21) \
 X(a, STATIC,   REPEATED, UINT32,   res_grain,        22) \
 X(a, STATIC,   REPEATED, UINT32,   res_brick,        23) \
-X(a, STATIC,   REPEATED, UINT32,   res_ore,          24)
+X(a, STATIC,   REPEATED, UINT32,   res_ore,          24) \
+X(a, STATIC,   SINGULAR, UINT32,   last_reject_reason, 25)
 #define catan_BoardState_CALLBACK NULL
 #define catan_BoardState_DEFAULT NULL
 
@@ -237,7 +244,7 @@ extern const pb_msgdesc_t catan_PlayerPresence_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardState_size
-#define catan_BoardState_size                    342
+#define catan_BoardState_size                    344
 #define catan_PlayerInput_size                   91
 #define catan_PlayerPresence_size                176
 

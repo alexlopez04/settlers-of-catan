@@ -60,3 +60,9 @@ app-example
 # generated native folders
 ios/
 android/
+
+# generated builds
+*.ipa
+*.apk
+*.app
+*.aab

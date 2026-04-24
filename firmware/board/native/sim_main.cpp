@@ -365,6 +365,76 @@ static void test_road_occupied_rejected() {
     CHECK_EQ((int)r, (int)RejectReason::ROAD_OCCUPIED);
 }
 
+// Verify the sensor-driven city upgrade path: settlement removed (onVertexAbsent)
+// then piece placed back (onVertexPresent) → PLACED_CITY emitted and game state
+// reflects the city.
+static void test_city_upgrade_via_sensor() {
+    g_current_test = "city_upgrade_via_sensor";
+    StateMachine sm;
+    resetScenario(sm);
+    markConnected(2);
+
+    game::setPhase(GamePhase::PLAYING);
+    game::setCurrentPlayer(0);
+    game::placeSettlement(10, 0);   // settlement already recorded in game state
+
+    // Player lifts the settlement piece off the board.
+    sm.onVertexAbsent(10);
+    auto es = drainEffects(sm);
+    CHECK(!containsEffect(es, EffectKind::PLACED_CITY));   // no upgrade yet
+    CHECK(!game::vertexState(10).is_city);                 // still a settlement
+
+    // Player sets the city piece down on the same vertex.
+    sm.onVertexPresent(10);
+    es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::PLACED_CITY));
+    CHECK(game::vertexState(10).is_city);
+    CHECK_EQ((int)game::vertexState(10).owner, 0);
+}
+
+// Verify that a city upgrade does NOT fire when no prior removal was detected
+// (guards against false upgrades from sensor glitches on a stationary piece).
+static void test_city_upgrade_requires_prior_removal() {
+    g_current_test = "city_upgrade_requires_prior_removal";
+    StateMachine sm;
+    resetScenario(sm);
+    markConnected(2);
+
+    game::setPhase(GamePhase::PLAYING);
+    game::setCurrentPlayer(0);
+    game::placeSettlement(10, 0);
+
+    // Fire onVertexPresent without a prior onVertexAbsent (sensor glitch).
+    sm.onVertexPresent(10);
+    auto es = drainEffects(sm);
+    CHECK(!containsEffect(es, EffectKind::PLACED_CITY));
+    CHECK(!game::vertexState(10).is_city);   // settlement must remain unchanged
+}
+
+// Verify that a removal during a different player's turn does not count as a
+// pending city upgrade for the piece owner.
+static void test_city_upgrade_only_on_owners_turn() {
+    g_current_test = "city_upgrade_only_on_owners_turn";
+    StateMachine sm;
+    resetScenario(sm);
+    markConnected(2);
+
+    game::setPhase(GamePhase::PLAYING);
+    game::placeSettlement(10, 0);   // settlement belongs to P0
+
+    // It is currently P1's turn.
+    game::setCurrentPlayer(1);
+
+    // P0's settlement is removed (perhaps bumped).
+    sm.onVertexAbsent(10);
+
+    // P0's settlement is placed back — must NOT upgrade because it is not P0's turn.
+    sm.onVertexPresent(10);
+    auto es = drainEffects(sm);
+    CHECK(!containsEffect(es, EffectKind::PLACED_CITY));
+    CHECK(!game::vertexState(10).is_city);
+}
+
 // =============================================================================
 // main
 // =============================================================================
@@ -381,6 +451,9 @@ int main() {
     test_winner_triggers_game_over();
     test_robber_same_tile_rejected();
     test_road_occupied_rejected();
+    test_city_upgrade_via_sensor();
+    test_city_upgrade_requires_prior_removal();
+    test_city_upgrade_only_on_owners_turn();
 
     std::printf("--------------------\n");
     std::printf("Checks: %d  Failed: %d\n", g_checks, g_failed);

@@ -31,6 +31,8 @@ import {
   encodePlayerInput,
   encodeReport,
 } from '@/services/proto';
+import { useSettings } from '@/context/settings-context';
+import { applySimulatedAction, createSimulatedState } from '@/services/sim-board';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -68,6 +70,8 @@ interface BleContextValue {
   sendAction: (action: PlayerAction) => Promise<void>;
   sendInput: (input: Partial<PlayerInput> & { action: PlayerAction }) => Promise<void>;
   sendReport: (vp: number, resources: ResourceCounts) => Promise<void>;
+  /** Immediately enter a fully-simulated game session (no BLE hardware needed). */
+  connectSimulated: () => void;
 }
 
 const BleContext = createContext<BleContextValue | null>(null);
@@ -116,6 +120,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const disconnectSubRef = useRef<Subscription | null>(null);
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clientIdRef = useRef<string | null>(null);
+  /** True while running in simulated-board mode (no real BLE device). */
+  const simulatedRef = useRef<boolean>(false);
+  /** Mutable copy of game state used by simulated action handlers. */
+  const simStateRef = useRef<BoardState | null>(null);
+
+  const { debug } = useSettings();
 
   const [bleState, setBleState] = useState<State>(State.Unknown);
   const [scanning, setScanning] = useState(false);
@@ -348,6 +358,16 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   // ── Disconnect ───────────────────────────────────────────────────────────
 
   const disconnect = useCallback(async () => {
+    if (simulatedRef.current) {
+      simulatedRef.current = false;
+      simStateRef.current  = null;
+      setConnectedName(null);
+      setPlayerId(null);
+      setGameState(null);
+      setConnectionState('idle');
+      return;
+    }
+
     const device = deviceRef.current;
     setConnectionState('disconnecting');
 
@@ -366,6 +386,19 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     setConnectionState('idle');
   }, [cleanupSubscriptions]);
 
+  // ── Simulated board ──────────────────────────────────────────────────────
+
+  const connectSimulated = useCallback(() => {
+    console.log('[SIM] entering simulated board mode');
+    const initial = createSimulatedState();
+    simulatedRef.current = true;
+    simStateRef.current  = initial;
+    setGameState(initial);
+    setPlayerId(0);
+    setConnectedName('Simulated Board');
+    setConnectionState('connected');
+  }, []);
+
   // ── Send helpers ─────────────────────────────────────────────────────────
 
   const writePayload = useCallback(async (payload: string) => {
@@ -380,6 +413,15 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
   const sendAction = useCallback(
     async (action: PlayerAction) => {
+      if (simulatedRef.current) {
+        const prev = simStateRef.current;
+        if (!prev) return;
+        const next = applySimulatedAction(prev, action);
+        simStateRef.current = next;
+        setGameState(next);
+        console.log('[SIM] action', action, '→ phase', next.phase);
+        return;
+      }
       const id = playerId ?? 0;
       await writePayload(encodeAction(id, action, clientIdRef.current ?? undefined));
     },
@@ -388,6 +430,14 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
   const sendInput = useCallback(
     async (input: Partial<PlayerInput> & { action: PlayerAction }) => {
+      if (simulatedRef.current) {
+        const prev = simStateRef.current;
+        if (!prev) return;
+        const next = applySimulatedAction(prev, input.action);
+        simStateRef.current = next;
+        setGameState(next);
+        return;
+      }
       const id = input.playerId ?? playerId ?? 0;
       await writePayload(
         encodePlayerInput({
@@ -408,6 +458,14 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
   const sendReport = useCallback(
     async (vp: number, resources: ResourceCounts) => {
+      if (simulatedRef.current) {
+        const prev = simStateRef.current;
+        if (!prev) return;
+        const next = applySimulatedAction(prev, PlayerAction.REPORT, vp, resources);
+        simStateRef.current = next;
+        setGameState(next);
+        return;
+      }
       const id = playerId ?? 0;
       await writePayload(encodeReport(id, vp, resources, clientIdRef.current ?? undefined));
     },
@@ -432,6 +490,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         sendAction,
         sendInput,
         sendReport,
+        connectSimulated,
       }}>
       {children}
     </BleContext.Provider>

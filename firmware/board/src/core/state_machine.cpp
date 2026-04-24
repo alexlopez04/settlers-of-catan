@@ -21,6 +21,7 @@ void StateMachine::reset() {
     board_setup_done_    = false;
     last_lobby_mask_     = 0xFF;
     last_reveal_num_     = 0xFF;
+    pending_city_mask_   = 0;
     effect_head_ = effect_tail_ = 0;
 }
 
@@ -54,6 +55,7 @@ bool StateMachine::hasEffects() const {
 
 void StateMachine::setPhase_(GamePhase p) {
     game::setPhase(p);
+    pending_city_mask_ = 0;   // stale removal flags don't cross phase boundaries
     pushEffect_(EffectKind::PHASE_ENTERED, (uint8_t)p);
 }
 
@@ -92,6 +94,27 @@ void StateMachine::handlePlayerAction(uint8_t player, ActionKind action, uint8_t
 // ---------------------------------------------------------------------------
 // Sensor event ingestion
 // ---------------------------------------------------------------------------
+
+// Called when a vertex sensor transitions present→absent (piece lifted).
+// During PLAYING phase we mark the vertex as "pending city upgrade" iff the
+// removed piece belonged to the current player's unupgraded settlement.  Any
+// other removal (wrong phase, wrong player, or already-city) clears the flag.
+void StateMachine::onVertexAbsent(uint8_t v) {
+    if (v >= VERTEX_COUNT) return;
+    const uint64_t bit = (1ULL << v);
+    if (game::phase() != GamePhase::PLAYING) {
+        pending_city_mask_ &= ~bit;
+        return;
+    }
+    const VertexState& vs = game::vertexState(v);
+    const uint8_t cp = game::currentPlayer();
+    if (vs.owner == cp && !vs.is_city) {
+        pending_city_mask_ |= bit;   // mark: settlement lifted, city may follow
+    } else {
+        pending_city_mask_ &= ~bit;  // not the current player's settlement
+    }
+}
+
 void StateMachine::onVertexPresent(uint8_t v) {
     if (v >= VERTEX_COUNT) return;
     const uint8_t cp = game::currentPlayer();
@@ -103,11 +126,21 @@ void StateMachine::onVertexPresent(uint8_t v) {
 
         case GamePhase::PLAYING: {
             const VertexState& vs = game::vertexState(v);
+            const uint64_t bit = (1ULL << v);
             if (vs.owner == NO_PLAYER) {
+                // Fresh vertex — new settlement placement.
+                pending_city_mask_ &= ~bit;
                 tryPlaceSettlement_(v, cp, /*initial=*/false);
-            } else if (vs.owner == cp && !vs.is_city) {
+            } else if (vs.owner == cp && !vs.is_city &&
+                       (pending_city_mask_ & bit)) {
+                // Current player's settlement was explicitly removed then
+                // placed back → treat as city upgrade.
+                pending_city_mask_ &= ~bit;
                 tryUpgradeCity_(v, cp);
             } else {
+                // Piece belongs to someone else, is already a city, or was
+                // not preceded by a confirmed removal — reject.
+                pending_city_mask_ &= ~bit;
                 pushEffect_(EffectKind::PLACEMENT_REJECTED, cp,
                             (uint8_t)RejectReason::VERTEX_OCCUPIED);
             }
@@ -320,7 +353,8 @@ void StateMachine::handlePlaying_() {
 
     // End turn
     if (pending_current_ == ActionKind::END_TURN && game::hasRolled()) {
-        pending_current_ = ActionKind::NONE;
+        pending_current_   = ActionKind::NONE;
+        pending_city_mask_ = 0;   // removal flags must not carry over to next player
         game::nextTurn();
         pushEffect_(EffectKind::TURN_ADVANCED, game::currentPlayer());
     }

@@ -77,6 +77,13 @@ void placeSettlement(uint8_t vertex_id, uint8_t player);
 void upgradeToCity(uint8_t vertex_id);
 void placeRoad(uint8_t edge_id, uint8_t player);
 
+// Last placement rejection — mirrors core::RejectReason.
+// Set by the I/O shell when PLACEMENT_REJECTED is emitted; broadcast once
+// then cleared.  0 = no pending rejection.
+uint8_t lastRejectReason();
+void    setLastRejectReason(uint8_t reason);
+void    clearLastRejectReason();
+
 // Robber
 uint8_t robberTile();
 void    setRobberTile(uint8_t tile_id);

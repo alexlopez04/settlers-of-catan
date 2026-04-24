@@ -17,10 +17,14 @@ import React, {
 
 export interface DebugSettings {
   vertexOverlay: boolean;
+  edgeOverlay: boolean;
+  simulatedBoard: boolean;
 }
 
 const DEFAULT_DEBUG: DebugSettings = {
   vertexOverlay: false,
+  edgeOverlay: false,
+  simulatedBoard: false,
 };
 
 // ── Context ───────────────────────────────────────────────────────────────────

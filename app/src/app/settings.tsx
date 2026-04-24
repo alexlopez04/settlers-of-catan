@@ -33,6 +33,16 @@ const DEBUG_TOGGLES: DebugToggleDef[] = [
     label: 'Vertex Number Overlay',
     description: 'Show vertex indices on the board overview map.',
   },
+  {
+    key: 'edgeOverlay',
+    label: 'Edge Number Overlay',
+    description: 'Show edge indices on the board overview map.',
+  },
+  {
+    key: 'simulatedBoard',
+    label: 'Simulated Board',
+    description: 'Show a "Simulated Board" option on the scan screen so all app functionality can be tested without hardware.',
+  },
 ];
 
 // ── Sub-components ────────────────────────────────────────────────────────────

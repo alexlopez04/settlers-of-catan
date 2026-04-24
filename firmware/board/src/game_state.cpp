@@ -23,6 +23,7 @@ EdgeState    edges[EDGE_COUNT];
 
 uint8_t      robber_tile_ = 0xFF;
 uint8_t      winner_id_   = NO_PLAYER;
+uint8_t      last_reject_reason_ = 0;
 
 // Number reveal order (Catan standard: 2,3,…,6,8,…,12)
 static const uint8_t kRevealOrder[] = { 2, 3, 4, 5, 6, 8, 9, 10, 11, 12 };
@@ -49,6 +50,7 @@ void init() {
     reveal_index    = 0;
     robber_tile_    = 0xFF;
     winner_id_      = NO_PLAYER;
+    last_reject_reason_ = 0;
     die1_ = die2_   = 0;
     has_rolled_     = false;
     setup_round_        = 0;
@@ -171,6 +173,11 @@ void placeRoad(uint8_t e, uint8_t p) {
     if (e >= EDGE_COUNT || p >= MAX_PLAYERS) return;
     edges[e].owner = p;
 }
+
+// ── Last reject reason ───────────────────────────────────────────────────────
+uint8_t lastRejectReason()           { return last_reject_reason_; }
+void    setLastRejectReason(uint8_t r) { last_reject_reason_ = r; }
+void    clearLastRejectReason()       { last_reject_reason_ = 0; }
 
 // ── Robber ──────────────────────────────────────────────────────────────────
 uint8_t robberTile() { return robber_tile_; }

@@ -2,14 +2,17 @@
   "expo": {
     "name": "Catan",
     "slug": "soc",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "soc",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/catan.icon",
-      "bundleIdentifier": "com.lemonyclick.soc"
+      "bundleIdentifier": "com.lemonyclick.soc",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "plugins": [
       "expo-router",
@@ -35,6 +38,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "225cc43f-faff-475d-8922-fc593e68b201"
+      }
     }
   }
 }

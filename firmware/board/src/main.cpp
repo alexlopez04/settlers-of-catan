@@ -207,6 +207,7 @@ static void applyEffect(const core::Effect& ef) {
         case EffectKind::PLACEMENT_REJECTED:
             LOGW("REJECT", "P%u reason=%s", (unsigned)(ef.a + 1),
                  rejectReasonName((core::RejectReason)ef.b));
+            game::setLastRejectReason(ef.b);
             break;
         case EffectKind::DICE_ROLLED: {
             uint8_t d1 = ef.a, d2 = ef.b;
@@ -266,13 +267,27 @@ static void applyEffect(const core::Effect& ef) {
 // ---------------------------------------------------------------------------
 static void pumpSensors() {
     for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
-        if (sensor::vertexChanged(v) && sensor::vertexPresent(v)) sm.onVertexPresent(v);
+        if (sensor::vertexChanged(v)) {
+            if (sensor::vertexPresent(v)) {
+                LOGD("SENSOR", "vertex %u: placed", (unsigned)v);
+                sm.onVertexPresent(v);
+            } else {
+                LOGD("SENSOR", "vertex %u: removed", (unsigned)v);
+                sm.onVertexAbsent(v);
+            }
+        }
     }
     for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
-        if (sensor::edgeChanged(e) && sensor::edgePresent(e)) sm.onEdgePresent(e);
+        if (sensor::edgeChanged(e) && sensor::edgePresent(e)) {
+            LOGD("SENSOR", "edge %u: placed", (unsigned)e);
+            sm.onEdgePresent(e);
+        }
     }
     for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        if (sensor::tileChanged(t) && sensor::tilePresent(t)) sm.onTilePresent(t);
+        if (sensor::tileChanged(t) && sensor::tilePresent(t)) {
+            LOGD("SENSOR", "tile %u: placed", (unsigned)t);
+            sm.onTilePresent(t);
+        }
     }
 }
 
@@ -388,6 +403,9 @@ static void broadcastBoardState() {
         s.res_ore[p]    = game::reportedRes(p, 4);
     }
 
+    // Single-shot placement rejection for the current player.
+    s.last_reject_reason = game::lastRejectReason();
+
     // Vertex ownership — 54 vertices packed as 27 bytes (two nibbles per byte).
     //   nibble 0x0..0x3 = settlement P0..P3
     //   nibble 0x4..0x7 = city       P0..P3 (owner = nibble & 0x3)
@@ -433,6 +451,9 @@ static void broadcastBoardState() {
         LOGE("BCAST", "BoardState encode fail");
         return;
     }
+    // Clear the single-shot rejection field after it has been encoded so
+    // subsequent broadcasts carry 0 (no rejection).
+    game::clearLastRejectReason();
     mega_link::send(CATAN_MSG_BOARD_STATE, buf, (uint8_t)n);
 }
 

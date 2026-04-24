@@ -108,6 +108,14 @@ message BoardState {
   repeated uint32 res_grain  = 22;
   repeated uint32 res_brick  = 23;
   repeated uint32 res_ore    = 24;
+
+  // Last placement rejection code for the current player.
+  // 0 = no rejection; set for exactly one broadcast cycle then cleared by the
+  // board. Values mirror the firmware RejectReason enum:
+  //   1=OUT_OF_TURN  2=WRONG_PHASE         3=VERTEX_OCCUPIED
+  //   4=TOO_CLOSE    5=ROAD_OCCUPIED        6=ROAD_NOT_CONNECTED
+  //   7=NOT_MY_SETTLEMENT  8=ROBBER_SAME_TILE  9=INVALID_INDEX
+  uint32 last_reject_reason = 25;
 }
 
 message PlayerInput {

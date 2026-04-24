@@ -312,6 +312,30 @@ export function BoardOverview({ visible, onClose, boardState }: Props) {
                   );
                 })}
 
+                {/* Debug: edge indices (toggled via Settings → Debug → Edge Number Overlay) */}
+                {debug.edgeOverlay && Array.from({ length: EDGE_COUNT }, (_, e) => {
+                  const [va, vb] = EDGE_VERTICES[e];
+                  const pa = geom.vertexPositions[va];
+                  const pb = geom.vertexPositions[vb];
+                  const mx = (pa.x + pb.x) / 2;
+                  const my = (pa.y + pb.y) / 2;
+                  const r = hexSize * 0.2;
+                  return (
+                    <G key={`dbg-e-${e}`}>
+                      <Circle cx={mx} cy={my} r={r} fill="rgba(180,60,0,0.75)" />
+                      <SvgText
+                        x={mx}
+                        y={my + r * 0.35}
+                        fontSize={r * 0.9}
+                        fontWeight="700"
+                        textAnchor="middle"
+                        fill="#FFFFFF">
+                        {e}
+                      </SvgText>
+                    </G>
+                  );
+                })}
+
                 {/* Robber */}
                 {robber < TILE_COUNT && (
                   <G>

@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { State } from 'react-native-ble-plx';
 
 import { ScannedDevice, useBle } from '@/context/ble-context';
+import { useSettings } from '@/context/settings-context';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { SFSymbolIcon } from '@/components/ui/symbol';
@@ -92,7 +93,8 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
 
 export default function ScanScreen() {
   const theme = useTheme();
-  const { bleState, scanning, devices, connectionState, startScan, stopScan, connect } = useBle();
+  const { bleState, scanning, devices, connectionState, startScan, stopScan, connect, connectSimulated } = useBle();
+  const { debug } = useSettings();
   const [connectingTo, setConnectingTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
@@ -313,6 +315,25 @@ export default function ScanScreen() {
                 />
                 <Text style={[styles.scanButtonText, { color: scanning ? theme.text : '#fff' }]}>
                   {scanning ? 'Stop Scanning' : 'Scan Again'}
+                </Text>
+              </View>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Debug: simulated board (only visible when the toggle is on in Settings → Debug) */}
+        {debug.simulatedBoard && connectionState === 'idle' && (
+          <View style={[styles.footer, { borderTopColor: theme.backgroundElement }]}>
+            <Pressable
+              onPress={connectSimulated}
+              style={({ pressed }) => [
+                styles.scanButton,
+                { backgroundColor: theme.backgroundElement, opacity: pressed ? 0.7 : 1 },
+              ]}>
+              <View style={styles.scanButtonInner}>
+                <SFSymbolIcon name="cpu" size={18} color={theme.text} fallback="⊡" />
+                <Text style={[styles.scanButtonText, { color: theme.text }]}>
+                  Connect to Simulated Board
                 </Text>
               </View>
             </Pressable>
