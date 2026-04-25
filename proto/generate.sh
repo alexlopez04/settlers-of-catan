@@ -8,6 +8,7 @@ cd "$(dirname "$0")"
 OUTS=(
     "../firmware/board/src/proto"
     "../firmware/hub/src/proto"
+    "../firmware/client/src/proto"
 )
 
 for OUT in "${OUTS[@]}"; do

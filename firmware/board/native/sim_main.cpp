@@ -336,8 +336,18 @@ static void test_winner_triggers_game_over() {
 
     game::setPhase(GamePhase::PLAYING);
     game::setCurrentPlayer(0);
-    // Player 0 reports VP_TO_WIN via an ACTION_REPORT.
-    sm.handlePlayerAction(0, ActionKind::REPORT, VP_TO_WIN);
+    game::setHasRolled(true);
+    // 4 cities = 8 VP + 1 settlement = 1 VP + 1 VP dev card = 10 VP.
+    // Use vertices spaced apart from each other.
+    game::placeSettlement(0, 0); game::upgradeToCity(0);
+    game::placeSettlement(8, 0); game::upgradeToCity(8);
+    game::placeSettlement(16, 0); game::upgradeToCity(16);
+    game::placeSettlement(24, 0); game::upgradeToCity(24);
+    game::placeSettlement(32, 0);
+    game::setDevCardCount(0, Dev::VP, 1);
+
+    // END_TURN forces recompute / winner check.
+    sm.handlePlayerAction(0, ActionKind::END_TURN);
     sm.tick(1);
     auto es = drainEffects(sm);
     const core::Effect* w = findEffect(es, EffectKind::WINNER);
@@ -377,6 +387,9 @@ static void test_city_upgrade_via_sensor() {
     game::setPhase(GamePhase::PLAYING);
     game::setCurrentPlayer(0);
     game::placeSettlement(10, 0);   // settlement already recorded in game state
+
+    // Player has prepaid for a city upgrade.
+    game::addPendingCityBuy(0);
 
     // Player lifts the settlement piece off the board.
     sm.onVertexAbsent(10);
@@ -436,6 +449,329 @@ static void test_city_upgrade_only_on_owners_turn() {
 }
 
 // =============================================================================
+// New-system scenarios
+// =============================================================================
+
+// Helper: enter PLAYING with player 0 active and rolled.
+static void enterPlayingWithRoll(StateMachine& sm, uint8_t num = 2) {
+    resetScenario(sm);
+    markConnected(num);
+    sm.tick(0);
+    drainEffects(sm);
+    game::initDevDeck();
+    game::setPhase(GamePhase::PLAYING);
+    game::setCurrentPlayer(0);
+    game::setHasRolled(true);
+}
+
+static void test_purchase_road_consumed_on_placement() {
+    g_current_test = "purchase_road_consumed_on_placement";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+
+    // Player 0 has settlement at vertex 0 with adjacent edges.
+    game::placeSettlement(0, 0);
+    game::addRes(0, Res::LUMBER, 1);
+    game::addRes(0, Res::BRICK, 1);
+
+    sm.handlePlayerAction(0, ActionKind::BUY_ROAD);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::PURCHASE_MADE));
+    CHECK_EQ((int)game::pendingRoadBuy(0), 1);
+    CHECK_EQ((int)game::resCount(0, Res::LUMBER), 0);
+    CHECK_EQ((int)game::resCount(0, Res::BRICK), 0);
+
+    // Place road at an edge incident to vertex 0.
+    uint8_t e = anyEdgeAtVertex(0);
+    sm.onEdgePresent(e);
+    es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::PLACED_ROAD));
+    CHECK_EQ((int)game::pendingRoadBuy(0), 0);
+}
+
+static void test_purchase_insufficient_resources() {
+    g_current_test = "purchase_insufficient_resources";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+
+    sm.handlePlayerAction(0, ActionKind::BUY_ROAD);
+    auto es = drainEffects(sm);
+    const core::Effect* rej = findEffect(es, EffectKind::PLACEMENT_REJECTED);
+    CHECK(rej != nullptr);
+    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::INSUFFICIENT_RESOURCES);
+    CHECK_EQ((int)game::pendingRoadBuy(0), 0);
+}
+
+static void test_distribute_resources_on_roll() {
+    g_current_test = "distribute_resources_on_roll";
+    game::init();
+    markConnected(2);
+    // Pin tile 0 to a specific biome+number.
+    g_tile_state[0].biome = Biome::FOREST;
+    g_tile_state[0].number = 6;
+    // Place P0's settlement at the first vertex of tile 0.
+    uint8_t v = TILE_TOPO[0].vertices[0];
+    game::placeSettlement(v, 0);
+    // Move robber away.
+    game::setRobberTile(5);
+    uint8_t before = game::resCount(0, Res::LUMBER);
+    uint8_t dealt = game::distributeResources(6);
+    CHECK(dealt >= 1);
+    CHECK(game::resCount(0, Res::LUMBER) > before);
+}
+
+static void test_distribute_skipped_on_robber_tile() {
+    g_current_test = "distribute_skipped_on_robber_tile";
+    game::init();
+    markConnected(2);
+    g_tile_state[0].biome = Biome::FOREST;
+    g_tile_state[0].number = 8;
+    uint8_t v = TILE_TOPO[0].vertices[0];
+    game::placeSettlement(v, 0);
+    game::setRobberTile(0);   // robber on the producing tile
+    uint8_t before = game::resCount(0, Res::LUMBER);
+    uint8_t dealt = game::distributeResources(8);
+    (void)dealt;
+    CHECK_EQ((int)game::resCount(0, Res::LUMBER), (int)before);
+}
+
+static void test_bank_depletion() {
+    g_current_test = "bank_depletion";
+    game::init();
+    markConnected(2);
+    // Two players claim more lumber than the bank holds.
+    for (uint8_t i = 0; i < 19; ++i) {
+        // Configure tile 0 to produce lumber on roll 5.
+        g_tile_state[0].biome = Biome::FOREST;
+        g_tile_state[0].number = 5;
+    }
+    // Both players have a city on tile 0 (two cities = 4 lumber/roll).
+    uint8_t v0 = TILE_TOPO[0].vertices[0];
+    uint8_t v1 = TILE_TOPO[0].vertices[2];   // skip neighbour for distance rule
+    game::placeSettlement(v0, 0); game::upgradeToCity(v0);
+    game::placeSettlement(v1, 1); game::upgradeToCity(v1);
+    // Drain the bank to 3 lumber.
+    game::setBankSupply(Res::LUMBER, 3);
+    game::setRobberTile(5);
+    game::distributeResources(5);
+    // Demand is 4 (2 cities × 2), bank has 3 → no one gets any.
+    CHECK_EQ((int)game::resCount(0, Res::LUMBER), 0);
+    CHECK_EQ((int)game::resCount(1, Res::LUMBER), 0);
+    CHECK_EQ((int)game::bankSupply(Res::LUMBER), 3);
+}
+
+static void test_seven_triggers_discard() {
+    g_current_test = "seven_triggers_discard";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    game::setHasRolled(false);   // we'll re-roll from scratch
+
+    // Give P1 enough cards to require discard.
+    for (uint8_t i = 0; i < 8; ++i) game::addRes(1, Res::WOOL, 1);
+    CHECK(game::totalCards(1) > 7);
+
+    // Force a 7 by seeding deterministically.
+    bool entered_discard = false;
+    for (uint32_t s = 1; s < 200 && !entered_discard; ++s) {
+        core::rng::seed(s);
+        game::clearDice();
+        game::setPhase(GamePhase::PLAYING);
+        sm.handlePlayerAction(0, ActionKind::ROLL_DICE);
+        sm.tick((uint32_t)s);
+        drainEffects(sm);
+        if (game::phase() == GamePhase::DISCARD) entered_discard = true;
+    }
+    CHECK(entered_discard);
+    CHECK(game::discardRequiredMask() & (1u << 1));
+    CHECK_EQ((int)game::discardRequiredCount(1), 4);
+
+    // P1 sends a valid discard.
+    core::ActionPayload p;
+    p.res[1] = 4;   // discard 4 wool
+    sm.handlePlayerAction(1, ActionKind::DISCARD, p);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::DISCARD_COMPLETED));
+    CHECK_EQ((int)game::resCount(1, Res::WOOL), 4);
+    CHECK_EQ((int)game::phase(), (int)GamePhase::ROBBER);
+}
+
+static void test_dev_card_bought_this_turn() {
+    g_current_test = "dev_card_bought_this_turn";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    game::initDevDeck();
+
+    // Give P0 the resources for one dev card.
+    game::addRes(0, Res::WOOL, 1);
+    game::addRes(0, Res::GRAIN, 1);
+    game::addRes(0, Res::ORE, 1);
+
+    sm.handlePlayerAction(0, ActionKind::BUY_DEV_CARD);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::DEV_CARD_DRAWN));
+
+    // Find which dev type was drawn.
+    Dev drawn = Dev::COUNT;
+    for (uint8_t d = 0; d < (uint8_t)Dev::COUNT; ++d) {
+        if (game::devCardCount(0, (Dev)d) > 0) {
+            drawn = (Dev)d;
+            break;
+        }
+    }
+    CHECK((int)drawn != (int)Dev::COUNT);
+    if (drawn != Dev::VP) {
+        // Should not be playable this turn.
+        CHECK(!game::canPlayDevCard(0, drawn));
+    }
+}
+
+static void test_play_monopoly() {
+    g_current_test = "play_monopoly";
+    StateMachine sm;
+    enterPlayingWithRoll(sm, 3);
+
+    // P0 owns a Monopoly card, not bought this turn.
+    game::setDevCardCount(0, Dev::MONOPOLY, 1);
+    // P1, P2 each have wool.
+    game::addRes(1, Res::WOOL, 3);
+    game::addRes(2, Res::WOOL, 5);
+
+    core::ActionPayload p;
+    p.monopoly_res = (uint8_t)Res::WOOL;
+    sm.handlePlayerAction(0, ActionKind::PLAY_MONOPOLY, p);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::MONOPOLY_PLAYED));
+    CHECK_EQ((int)game::resCount(0, Res::WOOL), 8);
+    CHECK_EQ((int)game::resCount(1, Res::WOOL), 0);
+    CHECK_EQ((int)game::resCount(2, Res::WOOL), 0);
+    CHECK_EQ((int)game::devCardCount(0, Dev::MONOPOLY), 0);
+    CHECK(game::cardPlayedThisTurn());
+}
+
+static void test_play_year_of_plenty() {
+    g_current_test = "play_year_of_plenty";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    game::setDevCardCount(0, Dev::YEAR_OF_PLENTY, 1);
+    core::ActionPayload p;
+    p.card_res_1 = (uint8_t)Res::ORE;
+    p.card_res_2 = (uint8_t)Res::GRAIN;
+    sm.handlePlayerAction(0, ActionKind::PLAY_YEAR_OF_PLENTY, p);
+    drainEffects(sm);
+    CHECK_EQ((int)game::resCount(0, Res::ORE), 1);
+    CHECK_EQ((int)game::resCount(0, Res::GRAIN), 1);
+}
+
+static void test_knight_largest_army() {
+    g_current_test = "knight_largest_army";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    // P0 plays 3 knights (over multiple turns, but for the test just call the
+    // play function 3 times with refilled cards).
+    for (int i = 0; i < 3; ++i) {
+        game::setDevCardCount(0, Dev::KNIGHT, 1);
+        game::setCardPlayedThisTurn(false);
+        // Robber must allow movement; pick a non-current tile.
+        game::setRobberTile(0);
+        sm.handlePlayerAction(0, ActionKind::PLAY_KNIGHT);
+        drainEffects(sm);
+        // After PLAY_KNIGHT, phase is ROBBER. Move robber to wrap up.
+        if (game::phase() == GamePhase::ROBBER) {
+            sm.onTilePresent((uint8_t)((i + 1) % TILE_COUNT));
+            drainEffects(sm);
+        }
+    }
+    CHECK_EQ((int)game::knightsPlayed(0), 3);
+    CHECK_EQ((int)game::largestArmyPlayer(), 0);
+}
+
+static void test_bank_trade_4_to_1() {
+    g_current_test = "bank_trade_4_to_1";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    game::addRes(0, Res::LUMBER, 4);
+    core::ActionPayload p;
+    p.res[(int)Res::LUMBER]  = 4;
+    p.want[(int)Res::ORE]    = 1;
+    sm.handlePlayerAction(0, ActionKind::BANK_TRADE, p);
+    drainEffects(sm);
+    CHECK_EQ((int)game::resCount(0, Res::LUMBER), 0);
+    CHECK_EQ((int)game::resCount(0, Res::ORE), 1);
+}
+
+static void test_bank_trade_invalid_rate() {
+    g_current_test = "bank_trade_invalid_rate";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    game::addRes(0, Res::LUMBER, 3);
+    core::ActionPayload p;
+    p.res[(int)Res::LUMBER] = 3;   // 3 lumber but no port — invalid
+    p.want[(int)Res::ORE]   = 1;
+    sm.handlePlayerAction(0, ActionKind::BANK_TRADE, p);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::PLACEMENT_REJECTED));
+    CHECK_EQ((int)game::resCount(0, Res::LUMBER), 3);
+}
+
+static void test_p2p_trade() {
+    g_current_test = "p2p_trade";
+    StateMachine sm;
+    enterPlayingWithRoll(sm);
+    game::addRes(0, Res::LUMBER, 2);
+    game::addRes(1, Res::ORE, 2);
+
+    core::ActionPayload offer;
+    offer.target = 1;
+    offer.res[(int)Res::LUMBER] = 2;
+    offer.want[(int)Res::ORE]   = 2;
+    sm.handlePlayerAction(0, ActionKind::TRADE_OFFER, offer);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::TRADE_OFFERED));
+
+    sm.handlePlayerAction(1, ActionKind::TRADE_ACCEPT);
+    es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::TRADE_ACCEPTED));
+    CHECK_EQ((int)game::resCount(0, Res::LUMBER), 0);
+    CHECK_EQ((int)game::resCount(0, Res::ORE), 2);
+    CHECK_EQ((int)game::resCount(1, Res::ORE), 0);
+    CHECK_EQ((int)game::resCount(1, Res::LUMBER), 2);
+    CHECK(!game::hasPendingTrade());
+}
+
+static void test_longest_road() {
+    g_current_test = "longest_road";
+    game::init();
+    game::setNumPlayers(2);
+
+    // Build a chain of 5 connected roads for P0.
+    // We pick edges sharing endpoints by walking VERTEX_TOPO.
+    // Start from vertex 0; pick one of its edges, then walk.
+    uint8_t cur_v = 0;
+    uint8_t prev_e = 0xFF;
+    for (uint8_t step = 0; step < 5; ++step) {
+        const VertexDef& vd = VERTEX_TOPO[cur_v];
+        uint8_t e = 0xFF;
+        for (uint8_t i = 0; i < 3; ++i) {
+            uint8_t cand = vd.edges[i];
+            if (cand >= EDGE_COUNT) continue;
+            if (cand == prev_e) continue;
+            if (game::edgeState(cand).owner != NO_PLAYER) continue;
+            e = cand; break;
+        }
+        if (e == 0xFF) break;
+        game::placeRoad(e, 0);
+        const EdgeDef& ed = EDGE_TOPO[e];
+        uint8_t other = (ed.vertices[0] == cur_v) ? ed.vertices[1] : ed.vertices[0];
+        cur_v = other;
+        prev_e = e;
+    }
+    CHECK_EQ((int)game::roadCount(0), 5);
+    game::recomputeLongestRoad();
+    CHECK_EQ((int)game::longestRoadPlayer(), 0);
+    CHECK(game::longestRoadLength() >= 5);
+}
+
+// =============================================================================
 // main
 // =============================================================================
 int main() {
@@ -454,6 +790,21 @@ int main() {
     test_city_upgrade_via_sensor();
     test_city_upgrade_requires_prior_removal();
     test_city_upgrade_only_on_owners_turn();
+
+    test_purchase_road_consumed_on_placement();
+    test_purchase_insufficient_resources();
+    test_distribute_resources_on_roll();
+    test_distribute_skipped_on_robber_tile();
+    test_bank_depletion();
+    test_seven_triggers_discard();
+    test_dev_card_bought_this_turn();
+    test_play_monopoly();
+    test_play_year_of_plenty();
+    test_knight_largest_army();
+    test_bank_trade_4_to_1();
+    test_bank_trade_invalid_rate();
+    test_p2p_trade();
+    test_longest_road();
 
     std::printf("--------------------\n");
     std::printf("Checks: %d  Failed: %d\n", g_checks, g_failed);

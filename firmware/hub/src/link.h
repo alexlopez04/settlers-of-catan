@@ -16,7 +16,7 @@
 namespace mega_link {
 
 // Callback invoked from poll() whenever a CRC-valid frame is received.
-typedef void (*FrameHandler)(uint8_t type, const uint8_t* payload, uint8_t len);
+typedef void (*FrameHandler)(uint8_t type, const uint8_t* payload, uint16_t len);
 
 void init(FrameHandler on_frame);
 
@@ -27,7 +27,7 @@ void poll();
 // Send a framed message. Returns true iff the frame was queued in the
 // HardwareSerial TX buffer. Encoding/CRC failures and oversized payloads
 // return false.
-bool send(uint8_t type, const uint8_t* payload, uint8_t payload_len);
+bool send(uint8_t type, const uint8_t* payload, uint16_t payload_len);
 
 // Diagnostics.
 struct Stats {

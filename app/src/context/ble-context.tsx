@@ -29,7 +29,6 @@ import {
   encodeAction,
   encodeIdentity,
   encodePlayerInput,
-  encodeReport,
 } from '@/services/proto';
 import { useSettings } from '@/context/settings-context';
 import { applySimulatedAction, createSimulatedState } from '@/services/sim-board';
@@ -69,7 +68,6 @@ interface BleContextValue {
   disconnect: () => Promise<void>;
   sendAction: (action: PlayerAction) => Promise<void>;
   sendInput: (input: Partial<PlayerInput> & { action: PlayerAction }) => Promise<void>;
-  sendReport: (vp: number, resources: ResourceCounts) => Promise<void>;
   /** Immediately enter a fully-simulated game session (no BLE hardware needed). */
   connectSimulated: () => void;
 }
@@ -256,7 +254,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
       try {
         console.log('[BLE] connecting to', deviceId, 'clientId=', cid);
-        const device = await mgr.connectToDevice(deviceId, { requestMTU: 247 });
+        const device = await mgr.connectToDevice(deviceId, { requestMTU: 512 });
         console.log('[BLE] connected, discovering services...');
         await device.discoverAllServicesAndCharacteristics();
         console.log('[BLE] services discovered');
@@ -416,7 +414,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       if (simulatedRef.current) {
         const prev = simStateRef.current;
         if (!prev) return;
-        const next = applySimulatedAction(prev, action);
+        const next = applySimulatedAction(prev, { action });
         simStateRef.current = next;
         setGameState(next);
         console.log('[SIM] action', action, '→ phase', next.phase);
@@ -433,7 +431,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       if (simulatedRef.current) {
         const prev = simStateRef.current;
         if (!prev) return;
-        const next = applySimulatedAction(prev, input.action);
+        const next = applySimulatedAction(prev, input);
         simStateRef.current = next;
         setGameState(next);
         return;
@@ -441,33 +439,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       const id = input.playerId ?? playerId ?? 0;
       await writePayload(
         encodePlayerInput({
+          ...input,
           playerId: id,
           action: input.action,
           clientId: input.clientId ?? clientIdRef.current ?? undefined,
-          vp: input.vp,
-          resLumber: input.resLumber,
-          resWool: input.resWool,
-          resGrain: input.resGrain,
-          resBrick: input.resBrick,
-          resOre: input.resOre,
         }),
       );
-    },
-    [playerId, writePayload],
-  );
-
-  const sendReport = useCallback(
-    async (vp: number, resources: ResourceCounts) => {
-      if (simulatedRef.current) {
-        const prev = simStateRef.current;
-        if (!prev) return;
-        const next = applySimulatedAction(prev, PlayerAction.REPORT, vp, resources);
-        simStateRef.current = next;
-        setGameState(next);
-        return;
-      }
-      const id = playerId ?? 0;
-      await writePayload(encodeReport(id, vp, resources, clientIdRef.current ?? undefined));
     },
     [playerId, writePayload],
   );
@@ -489,7 +466,6 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         disconnect,
         sendAction,
         sendInput,
-        sendReport,
         connectSimulated,
       }}>
       {children}

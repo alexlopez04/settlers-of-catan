@@ -37,7 +37,10 @@ static constexpr int      LINK_RX_PIN = 5;
 
 static constexpr uint8_t  MAX_PLAYERS         = 4;       // logical seat count
 static constexpr uint8_t  MAX_BLE_CONNECTIONS = 4;       // concurrent centrals
-static constexpr uint16_t BLE_MTU             = 247;     // matches NimBLE default cap
+// MTU must be ≥ CATAN_MAX_PAYLOAD + 3 (ATT opcode + handle overhead).
+// iOS auto-negotiates up to 512; Android honours the requestMTU hint in the app.
+// NimBLE hard-max is 517; 512 leaves 509 bytes of data per notification.
+static constexpr uint16_t BLE_MTU             = 512;
 
 // ── Cadence ────────────────────────────────────────────────────────────────
 static constexpr uint32_t HEARTBEAT_MS         = 5000;

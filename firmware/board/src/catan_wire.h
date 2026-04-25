@@ -13,7 +13,7 @@
 //
 // BLE payloads are bare nanopb bytes (no header) — ATT carries length.
 //
-// Schema version: 6.
+// Schema version: 7.
 // =============================================================================
 
 #include <stdint.h>
@@ -31,17 +31,20 @@ extern "C" {
 #endif
 
 #define CATAN_WIRE_MAGIC      0xCAu
-#define CATAN_PROTO_VERSION   6u
+#define CATAN_PROTO_VERSION   7u
 
 // Message type codes used in the UART frame header.
 #define CATAN_MSG_BOARD_STATE     0x01u
 #define CATAN_MSG_PLAYER_INPUT    0x02u
 #define CATAN_MSG_PLAYER_PRESENCE 0x03u
 
-// Payload + framing sizes. Picked to comfortably exceed the largest
-// nanopb-encoded message we currently emit; bump if you add fat fields.
-#define CATAN_MAX_PAYLOAD     240u
-#define CATAN_FRAME_OVERHEAD  4u        // magic + type + len + crc
+// Payload + framing sizes. Must be ≥ catan_BoardState_size (nanopb max ≈ 520).
+// In practice the PLAYING-phase worst-case encode is ~300 bytes; 340 is safe.
+// The BLE MTU (config.h BLE_MTU) must be ≥ CATAN_MAX_PAYLOAD + 3 (ATT header).
+#define CATAN_MAX_PAYLOAD     340u
+// Frame: [magic:1][type:1][len_lo:1][len_hi:1][payload:len][crc:1]
+// Two-byte little-endian length supports payloads up to 65535 bytes.
+#define CATAN_FRAME_OVERHEAD  5u
 #define CATAN_MAX_FRAME       (CATAN_MAX_PAYLOAD + CATAN_FRAME_OVERHEAD)
 
 // Maximum number of player slots — must match firmware/board/src/config.h.
@@ -75,9 +78,11 @@ static inline size_t catan_wire_pack(uint8_t type,
     if (cap < payload_len + CATAN_FRAME_OVERHEAD) return 0;
     frame[0] = CATAN_WIRE_MAGIC;
     frame[1] = type;
-    frame[2] = (uint8_t)payload_len;
-    if (payload_len) memcpy(frame + 3, payload, payload_len);
-    frame[3 + payload_len] = catan_crc8(frame + 1, payload_len + 2);
+    frame[2] = (uint8_t)(payload_len & 0xFFu);         // len low byte
+    frame[3] = (uint8_t)((payload_len >> 8) & 0xFFu);  // len high byte
+    if (payload_len) memcpy(frame + 4, payload, payload_len);
+    // CRC covers: type + len_lo + len_hi + payload
+    frame[4 + payload_len] = catan_crc8(frame + 1, payload_len + 3);
     return payload_len + CATAN_FRAME_OVERHEAD;
 }
 
@@ -86,15 +91,15 @@ static inline size_t catan_wire_pack(uint8_t type,
 static inline bool catan_wire_unpack(const uint8_t* frame, size_t frame_len,
                                      uint8_t* out_type,
                                      const uint8_t** out_payload,
-                                     uint8_t* out_payload_len) {
+                                     uint16_t* out_payload_len) {
     if (frame_len < CATAN_FRAME_OVERHEAD) return false;
     if (frame[0] != CATAN_WIRE_MAGIC) return false;
-    uint8_t len = frame[2];
+    uint16_t len = (uint16_t)frame[2] | ((uint16_t)frame[3] << 8);
     if ((size_t)len + CATAN_FRAME_OVERHEAD != frame_len) return false;
-    uint8_t want_crc = catan_crc8(frame + 1, (size_t)len + 2);
-    if (frame[3 + len] != want_crc) return false;
+    uint8_t want_crc = catan_crc8(frame + 1, (size_t)len + 3);
+    if (frame[4 + len] != want_crc) return false;
     *out_type = frame[1];
-    *out_payload = frame + 3;
+    *out_payload = frame + 4;
     *out_payload_len = len;
     return true;
 }

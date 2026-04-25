@@ -1,4 +1,4 @@
-import { GamePhase, PlayerAction } from '@/services/proto';
+import { GamePhase, PlayerAction, Resource } from '@/services/proto';
 import type { ResourceCounts } from '@/context/ble-context';
 
 // ── Phase display labels ──────────────────────────────────────────────────
@@ -10,6 +10,7 @@ export const PHASE_LABEL: Record<GamePhase, string> = {
   [GamePhase.INITIAL_PLACEMENT]: 'Initial Placement',
   [GamePhase.PLAYING]: 'Playing',
   [GamePhase.ROBBER]: 'Robber',
+  [GamePhase.DISCARD]: 'Discard',
   [GamePhase.GAME_OVER]: 'Game Over',
 };
 
@@ -17,12 +18,12 @@ export const PHASE_LABEL: Record<GamePhase, string> = {
 
 export type ResKey = keyof ResourceCounts;
 
-export const RESOURCES: { key: ResKey; emoji: string; label: string }[] = [
-  { key: 'lumber', emoji: '🪵', label: 'Lumber' },
-  { key: 'wool',   emoji: '🐑', label: 'Wool'   },
-  { key: 'grain',  emoji: '🌾', label: 'Grain'  },
-  { key: 'brick',  emoji: '🧱', label: 'Brick'  },
-  { key: 'ore',    emoji: '⛏',  label: 'Ore'    },
+export const RESOURCES: { key: ResKey; emoji: string; label: string; index: Resource }[] = [
+  { key: 'lumber', emoji: '🪵', label: 'Lumber', index: Resource.LUMBER },
+  { key: 'wool',   emoji: '🐑', label: 'Wool',   index: Resource.WOOL   },
+  { key: 'grain',  emoji: '🌾', label: 'Grain',  index: Resource.GRAIN  },
+  { key: 'brick',  emoji: '🧱', label: 'Brick',  index: Resource.BRICK  },
+  { key: 'ore',    emoji: '⛏',  label: 'Ore',    index: Resource.ORE    },
 ];
 
 // ── Dice ──────────────────────────────────────────────────────────────────
@@ -77,7 +78,11 @@ export function buttonsForPhase(
       return [{ label: 'End Turn', sfSymbol: 'arrow.trianglehead.clockwise', action: PlayerAction.END_TURN, enabled: myTurn, primary: myTurn }];
     }
     case GamePhase.ROBBER:
-      return [{ label: 'Skip Robber', sfSymbol: 'forward.fill', action: PlayerAction.SKIP_ROBBER, enabled: myTurn, primary: myTurn }];
+      // Robber tile picking is handled in a modal; provide Skip when applicable.
+      return [{ label: 'Skip Steal', sfSymbol: 'forward.fill', action: PlayerAction.SKIP_ROBBER, enabled: myTurn, primary: myTurn }];
+    case GamePhase.DISCARD:
+      // Discard counts are entered via a modal; no inline buttons.
+      return [];
     default:
       return [];
   }

@@ -16,8 +16,9 @@ typedef enum _catan_GamePhase {
     catan_GamePhase_PHASE_NUMBER_REVEAL = 2,
     catan_GamePhase_PHASE_INITIAL_PLACEMENT = 3,
     catan_GamePhase_PHASE_PLAYING = 4,
-    catan_GamePhase_PHASE_ROBBER = 5,
-    catan_GamePhase_PHASE_GAME_OVER = 6
+    catan_GamePhase_PHASE_ROBBER = 5, /* active player must move robber + (optionally) steal */
+    catan_GamePhase_PHASE_DISCARD = 6, /* one or more players must discard down to 7 cards */
+    catan_GamePhase_PHASE_GAME_OVER = 7
 } catan_GamePhase;
 
 typedef enum _catan_PlayerAction {
@@ -28,14 +29,64 @@ typedef enum _catan_PlayerAction {
     catan_PlayerAction_ACTION_PLACE_DONE = 4,
     catan_PlayerAction_ACTION_ROLL_DICE = 5,
     catan_PlayerAction_ACTION_END_TURN = 6,
-    catan_PlayerAction_ACTION_SKIP_ROBBER = 7,
-    catan_PlayerAction_ACTION_REPORT = 8
+    catan_PlayerAction_ACTION_SKIP_ROBBER = 7, /* legacy: skip-steal after robber move when no targets */
+    /* ── Purchases ──────────────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_BUY_ROAD = 10,
+    catan_PlayerAction_ACTION_BUY_SETTLEMENT = 11,
+    catan_PlayerAction_ACTION_BUY_CITY = 12,
+    catan_PlayerAction_ACTION_BUY_DEV_CARD = 13,
+    /* ── Robber + Discard ───────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_PLACE_ROBBER = 14, /* payload: robber_tile */
+    catan_PlayerAction_ACTION_STEAL_FROM = 15, /* payload: target_player */
+    catan_PlayerAction_ACTION_DISCARD = 16, /* payload: res_lumber..res_ore (counts) */
+    /* ── Trade ──────────────────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_BANK_TRADE = 17, /* payload: res_lumber..ore (give), want_lumber..ore (get) */
+    catan_PlayerAction_ACTION_TRADE_OFFER = 18, /* payload: target_player + offer/want */
+    catan_PlayerAction_ACTION_TRADE_ACCEPT = 19,
+    catan_PlayerAction_ACTION_TRADE_DECLINE = 20,
+    catan_PlayerAction_ACTION_TRADE_CANCEL = 21, /* current player retracts an open offer */
+    /* ── Development cards ──────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_PLAY_KNIGHT = 22,
+    catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING = 23,
+    catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY = 24, /* payload: card_res_1, card_res_2 (resource indices) */
+    catan_PlayerAction_ACTION_PLAY_MONOPOLY = 25 /* payload: monopoly_res */
 } catan_PlayerAction;
+
+/* Resource type (also used as index into per-player count arrays):
+   0 = LUMBER, 1 = WOOL, 2 = GRAIN, 3 = BRICK, 4 = ORE */
+typedef enum _catan_ResourceType {
+    catan_ResourceType_RES_LUMBER = 0,
+    catan_ResourceType_RES_WOOL = 1,
+    catan_ResourceType_RES_GRAIN = 2,
+    catan_ResourceType_RES_BRICK = 3,
+    catan_ResourceType_RES_ORE = 4
+} catan_ResourceType;
+
+/* Development card type (also used as index into dev_cards arrays):
+   0 = KNIGHT, 1 = VP, 2 = ROAD_BUILDING, 3 = YEAR_OF_PLENTY, 4 = MONOPOLY */
+typedef enum _catan_DevCardType {
+    catan_DevCardType_DEV_KNIGHT = 0,
+    catan_DevCardType_DEV_VP = 1,
+    catan_DevCardType_DEV_ROAD_BUILDING = 2,
+    catan_DevCardType_DEV_YEAR_OF_PLENTY = 3,
+    catan_DevCardType_DEV_MONOPOLY = 4
+} catan_DevCardType;
 
 /* Struct definitions */
 typedef PB_BYTES_ARRAY_T(19) catan_BoardState_tiles_packed_t;
 typedef PB_BYTES_ARRAY_T(27) catan_BoardState_vertex_owners_t;
 typedef PB_BYTES_ARRAY_T(36) catan_BoardState_edge_owners_t;
+typedef PB_BYTES_ARRAY_T(20) catan_BoardState_dev_cards_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_knights_played_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_discard_required_count_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_pending_road_buy_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_pending_settlement_buy_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_pending_city_buy_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_free_roads_remaining_t;
+typedef PB_BYTES_ARRAY_T(5) catan_BoardState_trade_offer_t;
+typedef PB_BYTES_ARRAY_T(5) catan_BoardState_trade_want_t;
+typedef PB_BYTES_ARRAY_T(5) catan_BoardState_bank_supply_t;
+typedef PB_BYTES_ARRAY_T(20) catan_BoardState_last_distribution_t;
 typedef struct _catan_BoardState {
     uint32_t proto_version;
     catan_GamePhase phase;
@@ -49,9 +100,10 @@ typedef struct _catan_BoardState {
     uint32_t winner_id; /* 0xFF if no winner yet */
     uint32_t robber_tile; /* 0xFF if unplaced */
     uint32_t connected_mask; /* bit i set => player i has a phone connected */
-    catan_BoardState_tiles_packed_t tiles_packed; /* 19 bytes, one per tile (see above) */
+    catan_BoardState_tiles_packed_t tiles_packed; /* 19 bytes, one per tile (high nibble biome, low nibble number) */
     pb_size_t vp_count;
-    uint32_t vp[4]; /* self-reported VP per player, max 4 */
+    uint32_t vp[4]; /* PUBLIC VP per player (settlements + cities + LR + LA), */
+    /* hidden VP dev cards excluded until game ends. */
     pb_size_t ready_count;
     uint32_t ready[4]; /* 0/1 ready flag per player slot, max 4 */
     /* Settlements / cities per vertex (54 vertices, packed as 27 bytes).
@@ -68,8 +120,7 @@ typedef struct _catan_BoardState {
      0x0..0x3 = road owned by player 0..3
      0xF      = empty */
     catan_BoardState_edge_owners_t edge_owners;
-    /* Self-reported resource counts per player (via ACTION_REPORT), persisted
- so the board can restore a reconnecting mobile's hand. Index = player id. */
+    /* Resource counts per player. Index = player id; length = 4. */
     pb_size_t res_lumber_count;
     uint32_t res_lumber[4];
     pb_size_t res_wool_count;
@@ -80,12 +131,61 @@ typedef struct _catan_BoardState {
     uint32_t res_brick[4];
     pb_size_t res_ore_count;
     uint32_t res_ore[4];
-    /* Last placement rejection code for the current player.
-   0 = no rejection; set for one broadcast cycle then cleared by the board.
-   Values mirror firmware RejectReason: 1=OUT_OF_TURN 2=WRONG_PHASE
-   3=VERTEX_OCCUPIED 4=TOO_CLOSE 5=ROAD_OCCUPIED 6=ROAD_NOT_CONNECTED
-   7=NOT_MY_SETTLEMENT 8=ROBBER_SAME_TILE 9=INVALID_INDEX */
+    /* Last placement / action rejection code for the current player.
+ 0 = no rejection; set for exactly one broadcast cycle then cleared by
+ the board. Mirrors firmware RejectReason — see catan.proto enum doc. */
     uint32_t last_reject_reason;
+    /* ── Development cards (server-authoritative) ─────────────────────────────
+ Per-player inventory packed as 5 bytes per player (one byte per type)
+ in player-major order: [P0 K,VP,RB,YoP,Mono, P1 ..., P2 ..., P3 ...].
+ Total 20 bytes. */
+    catan_BoardState_dev_cards_t dev_cards;
+    /* Knights played per player (4 bytes). */
+    catan_BoardState_knights_played_t knights_played;
+    /* Player holding Largest Army (≥3 knights), or 0xFF if none. */
+    uint32_t largest_army_player;
+    /* Player holding Longest Road (≥5 connected roads), or 0xFF if none. */
+    uint32_t longest_road_player;
+    /* Length of the current Longest Road title-holding chain (0 if none). */
+    uint32_t longest_road_length;
+    /* Cards left in the dev card deck (0..25). */
+    uint32_t dev_deck_remaining;
+    /* True if the current player has already played a dev card this turn. */
+    bool card_played_this_turn;
+    /* ── Robber + Discard ─────────────────────────────────────────────────────
+ Bitmask of players who must discard before the robber can be moved.
+ Set when dice rolls 7 and any player has > 7 cards. A player exits
+ the mask by sending ACTION_DISCARD with valid counts. When the mask
+ hits 0 the FSM transitions to PHASE_ROBBER. */
+    uint32_t discard_required_mask;
+    /* Discard amount per player (the number of cards each must discard).
+ 4 bytes; 0 for players not in `discard_required_mask`. */
+    catan_BoardState_discard_required_count_t discard_required_count;
+    /* After PLACE_ROBBER, bitmask of players adjacent to the new robber tile
+ who hold ≥1 resource — these are the candidates for ACTION_STEAL_FROM.
+ 0 means no one is eligible; the FSM exits robber phase automatically. */
+    uint32_t steal_eligible_mask;
+    /* ── Pending purchases ────────────────────────────────────────────────────
+ Pending purchase counters per player. Each 4-byte field stores a per
+ player count — when > 0, the player has prepaid for that piece type
+ and the next valid placement consumes one credit. */
+    catan_BoardState_pending_road_buy_t pending_road_buy; /* 4 bytes */
+    catan_BoardState_pending_settlement_buy_t pending_settlement_buy; /* 4 bytes */
+    catan_BoardState_pending_city_buy_t pending_city_buy; /* 4 bytes */
+    /* Free roads remaining from a Road Building card (per player, 4 bytes). */
+    catan_BoardState_free_roads_remaining_t free_roads_remaining;
+    /* ── Trade (one pending offer at a time) ────────────────────────────────── */
+    uint32_t trade_from_player; /* 0xFF if no pending trade */
+    uint32_t trade_to_player; /* 0xFF = open offer to all opponents */
+    catan_BoardState_trade_offer_t trade_offer; /* 5 bytes — counts of L,W,G,B,O the offerer gives */
+    catan_BoardState_trade_want_t trade_want; /* 5 bytes — counts of L,W,G,B,O the offerer wants */
+    /* Bank supply per resource (5 bytes: L,W,G,B,O). */
+    catan_BoardState_bank_supply_t bank_supply;
+    /* Resources just distributed for the current dice roll. Set for one
+ broadcast cycle after a non-7 roll completes distribution. 20 bytes
+ in player-major order, one byte per (player, resource) — same layout
+ as `dev_cards`. All zero outside the distribution broadcast. */
+    catan_BoardState_last_distribution_t last_distribution;
 } catan_BoardState;
 
 typedef struct _catan_PlayerInput {
@@ -97,13 +197,33 @@ typedef struct _catan_PlayerInput {
  the BLE connection slot, so client_id is informational only (used by
  the Mega for diagnostics and by the hub for slot persistence). */
     char client_id[40];
-    /* Fields below populated only for ACTION_REPORT. */
-    uint32_t vp;
+    /* Generic resource payload — used by:
+   ACTION_DISCARD       — counts to discard
+   ACTION_BANK_TRADE    — counts to give
+   ACTION_TRADE_OFFER   — counts the offerer is giving
+   ACTION_PLAY_YEAR_OF_PLENTY (legacy alt: see card_res_*) */
     uint32_t res_lumber;
     uint32_t res_wool;
     uint32_t res_grain;
     uint32_t res_brick;
     uint32_t res_ore;
+    /* "Wanted" resource payload — used by:
+   ACTION_BANK_TRADE    — counts to receive
+   ACTION_TRADE_OFFER   — counts the offerer wants */
+    uint32_t want_lumber;
+    uint32_t want_wool;
+    uint32_t want_grain;
+    uint32_t want_brick;
+    uint32_t want_ore;
+    /* ACTION_PLACE_ROBBER — destination tile (0..18). */
+    uint32_t robber_tile;
+    /* ACTION_STEAL_FROM, ACTION_TRADE_OFFER — target player (0..3, 0xFF for open offer). */
+    uint32_t target_player;
+    /* ACTION_PLAY_MONOPOLY — resource index to monopolize (0..4). */
+    uint32_t monopoly_res;
+    /* ACTION_PLAY_YEAR_OF_PLENTY — two chosen resource indices (0..4). */
+    uint32_t card_res_1;
+    uint32_t card_res_2;
 } catan_PlayerInput;
 
 /* PlayerPresence — sent by the hub to the Mega whenever the set of
@@ -130,8 +250,16 @@ extern "C" {
 #define _catan_GamePhase_ARRAYSIZE ((catan_GamePhase)(catan_GamePhase_PHASE_GAME_OVER+1))
 
 #define _catan_PlayerAction_MIN catan_PlayerAction_ACTION_NONE
-#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_REPORT
-#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_REPORT+1))
+#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_PLAY_MONOPOLY
+#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_PLAY_MONOPOLY+1))
+
+#define _catan_ResourceType_MIN catan_ResourceType_RES_LUMBER
+#define _catan_ResourceType_MAX catan_ResourceType_RES_ORE
+#define _catan_ResourceType_ARRAYSIZE ((catan_ResourceType)(catan_ResourceType_RES_ORE+1))
+
+#define _catan_DevCardType_MIN catan_DevCardType_DEV_KNIGHT
+#define _catan_DevCardType_MAX catan_DevCardType_DEV_MONOPOLY
+#define _catan_DevCardType_ARRAYSIZE ((catan_DevCardType)(catan_DevCardType_DEV_MONOPOLY+1))
 
 #define catan_BoardState_phase_ENUMTYPE catan_GamePhase
 
@@ -140,11 +268,11 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0}
-#define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}}
+#define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 #define catan_PlayerPresence_init_default        {0, 0, 0, {"", "", "", ""}}
-#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0}
-#define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}}
+#define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 #define catan_PlayerPresence_init_zero           {0, 0, 0, {"", "", "", ""}}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -170,16 +298,46 @@ extern "C" {
 #define catan_BoardState_res_grain_tag           22
 #define catan_BoardState_res_brick_tag           23
 #define catan_BoardState_res_ore_tag             24
+#define catan_BoardState_last_reject_reason_tag  25
+#define catan_BoardState_dev_cards_tag           30
+#define catan_BoardState_knights_played_tag      31
+#define catan_BoardState_largest_army_player_tag 32
+#define catan_BoardState_longest_road_player_tag 33
+#define catan_BoardState_longest_road_length_tag 34
+#define catan_BoardState_dev_deck_remaining_tag  35
+#define catan_BoardState_card_played_this_turn_tag 36
+#define catan_BoardState_discard_required_mask_tag 37
+#define catan_BoardState_discard_required_count_tag 38
+#define catan_BoardState_steal_eligible_mask_tag 39
+#define catan_BoardState_pending_road_buy_tag    40
+#define catan_BoardState_pending_settlement_buy_tag 41
+#define catan_BoardState_pending_city_buy_tag    42
+#define catan_BoardState_free_roads_remaining_tag 43
+#define catan_BoardState_trade_from_player_tag   50
+#define catan_BoardState_trade_to_player_tag     51
+#define catan_BoardState_trade_offer_tag         52
+#define catan_BoardState_trade_want_tag          53
+#define catan_BoardState_bank_supply_tag         60
+#define catan_BoardState_last_distribution_tag   61
 #define catan_PlayerInput_proto_version_tag      1
 #define catan_PlayerInput_player_id_tag          2
 #define catan_PlayerInput_action_tag             3
 #define catan_PlayerInput_client_id_tag          4
-#define catan_PlayerInput_vp_tag                 10
 #define catan_PlayerInput_res_lumber_tag         11
 #define catan_PlayerInput_res_wool_tag           12
 #define catan_PlayerInput_res_grain_tag          13
 #define catan_PlayerInput_res_brick_tag          14
 #define catan_PlayerInput_res_ore_tag            15
+#define catan_PlayerInput_want_lumber_tag        16
+#define catan_PlayerInput_want_wool_tag          17
+#define catan_PlayerInput_want_grain_tag         18
+#define catan_PlayerInput_want_brick_tag         19
+#define catan_PlayerInput_want_ore_tag           20
+#define catan_PlayerInput_robber_tile_tag        21
+#define catan_PlayerInput_target_player_tag      22
+#define catan_PlayerInput_monopoly_res_tag       23
+#define catan_PlayerInput_card_res_1_tag         24
+#define catan_PlayerInput_card_res_2_tag         25
 #define catan_PlayerPresence_proto_version_tag   1
 #define catan_PlayerPresence_connected_mask_tag  2
 #define catan_PlayerPresence_client_ids_tag      3
@@ -208,7 +366,27 @@ X(a, STATIC,   REPEATED, UINT32,   res_wool,         21) \
 X(a, STATIC,   REPEATED, UINT32,   res_grain,        22) \
 X(a, STATIC,   REPEATED, UINT32,   res_brick,        23) \
 X(a, STATIC,   REPEATED, UINT32,   res_ore,          24) \
-X(a, STATIC,   SINGULAR, UINT32,   last_reject_reason, 25)
+X(a, STATIC,   SINGULAR, UINT32,   last_reject_reason,  25) \
+X(a, STATIC,   SINGULAR, BYTES,    dev_cards,        30) \
+X(a, STATIC,   SINGULAR, BYTES,    knights_played,   31) \
+X(a, STATIC,   SINGULAR, UINT32,   largest_army_player,  32) \
+X(a, STATIC,   SINGULAR, UINT32,   longest_road_player,  33) \
+X(a, STATIC,   SINGULAR, UINT32,   longest_road_length,  34) \
+X(a, STATIC,   SINGULAR, UINT32,   dev_deck_remaining,  35) \
+X(a, STATIC,   SINGULAR, BOOL,     card_played_this_turn,  36) \
+X(a, STATIC,   SINGULAR, UINT32,   discard_required_mask,  37) \
+X(a, STATIC,   SINGULAR, BYTES,    discard_required_count,  38) \
+X(a, STATIC,   SINGULAR, UINT32,   steal_eligible_mask,  39) \
+X(a, STATIC,   SINGULAR, BYTES,    pending_road_buy,  40) \
+X(a, STATIC,   SINGULAR, BYTES,    pending_settlement_buy,  41) \
+X(a, STATIC,   SINGULAR, BYTES,    pending_city_buy,  42) \
+X(a, STATIC,   SINGULAR, BYTES,    free_roads_remaining,  43) \
+X(a, STATIC,   SINGULAR, UINT32,   trade_from_player,  50) \
+X(a, STATIC,   SINGULAR, UINT32,   trade_to_player,  51) \
+X(a, STATIC,   SINGULAR, BYTES,    trade_offer,      52) \
+X(a, STATIC,   SINGULAR, BYTES,    trade_want,       53) \
+X(a, STATIC,   SINGULAR, BYTES,    bank_supply,      60) \
+X(a, STATIC,   SINGULAR, BYTES,    last_distribution,  61)
 #define catan_BoardState_CALLBACK NULL
 #define catan_BoardState_DEFAULT NULL
 
@@ -217,12 +395,21 @@ X(a, STATIC,   SINGULAR, UINT32,   proto_version,     1) \
 X(a, STATIC,   SINGULAR, UINT32,   player_id,         2) \
 X(a, STATIC,   SINGULAR, UENUM,    action,            3) \
 X(a, STATIC,   SINGULAR, STRING,   client_id,         4) \
-X(a, STATIC,   SINGULAR, UINT32,   vp,               10) \
 X(a, STATIC,   SINGULAR, UINT32,   res_lumber,       11) \
 X(a, STATIC,   SINGULAR, UINT32,   res_wool,         12) \
 X(a, STATIC,   SINGULAR, UINT32,   res_grain,        13) \
 X(a, STATIC,   SINGULAR, UINT32,   res_brick,        14) \
-X(a, STATIC,   SINGULAR, UINT32,   res_ore,          15)
+X(a, STATIC,   SINGULAR, UINT32,   res_ore,          15) \
+X(a, STATIC,   SINGULAR, UINT32,   want_lumber,      16) \
+X(a, STATIC,   SINGULAR, UINT32,   want_wool,        17) \
+X(a, STATIC,   SINGULAR, UINT32,   want_grain,       18) \
+X(a, STATIC,   SINGULAR, UINT32,   want_brick,       19) \
+X(a, STATIC,   SINGULAR, UINT32,   want_ore,         20) \
+X(a, STATIC,   SINGULAR, UINT32,   robber_tile,      21) \
+X(a, STATIC,   SINGULAR, UINT32,   target_player,    22) \
+X(a, STATIC,   SINGULAR, UINT32,   monopoly_res,     23) \
+X(a, STATIC,   SINGULAR, UINT32,   card_res_1,       24) \
+X(a, STATIC,   SINGULAR, UINT32,   card_res_2,       25)
 #define catan_PlayerInput_CALLBACK NULL
 #define catan_PlayerInput_DEFAULT NULL
 
@@ -244,8 +431,8 @@ extern const pb_msgdesc_t catan_PlayerPresence_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardState_size
-#define catan_BoardState_size                    344
-#define catan_PlayerInput_size                   91
+#define catan_BoardState_size                    520
+#define catan_PlayerInput_size                   155
 #define catan_PlayerPresence_size                176
 
 #ifdef __cplusplus

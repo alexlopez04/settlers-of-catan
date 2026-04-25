@@ -2,42 +2,39 @@
 // =============================================================================
 // core/state_machine.h — Pure game phase finite state machine.
 //
-// Consumes events (player actions, sensor presence notifications, periodic
-// ticks) and emits effects (phase transitions, placement outcomes, dice
-// rolls, robber moves, LED cues). Mutates game state through the `game::`
-// namespace; calls `core::rules` to validate placements; never touches
-// Arduino / LED / comm / sensor managers directly.
+// Consumes player actions, sensor presence notifications and ticks; emits
+// effects (phase transitions, placement outcomes, dice rolls, robber moves,
+// resource distributions, dev-card events, trades, winner). Mutates game
+// state through `game::`; calls `core::rules` for validation.
 //
-// Everything in this file is host-compilable for simulation. The I/O shell
-// (firmware/board/src/main.cpp) is responsible for:
-//   - decoding sensor/LoRa traffic into Events,
-//   - translating emitted Effects into hardware side-effects,
-//   - broadcasting BoardState over I2C to the player stations.
+// Host-compilable for the native simulation (firmware/board/native/sim_main.cpp).
 // =============================================================================
 
 #include <stdint.h>
 #include "core/events.h"
-#include "game_state.h"   // for GamePhase enum
+#include "game_state.h"
 
 namespace core {
 
 class StateMachine {
 public:
-    static constexpr uint8_t EFFECT_QUEUE_SIZE = 32;
+    static constexpr uint8_t EFFECT_QUEUE_SIZE = 64;
 
     StateMachine();
 
-    // Full reset — call after `game::init()` before starting a new run.
     void reset();
 
     // ── Event ingestion ─────────────────────────────────────────────────
-    void handlePlayerAction(uint8_t player, ActionKind action, uint8_t vp = 0);
-    // onVertexPresent  — piece detected at vertex (sensor absent→present).
-    // onVertexAbsent   — piece removed from vertex (sensor present→absent).
-    //   During PLAYING, onVertexAbsent marks the vertex as "pending city
-    //   upgrade" so that a subsequent onVertexPresent on the same vertex
-    //   (during the same player's turn) is treated as a city upgrade rather
-    //   than a new settlement or erroneous sensor trigger.
+    // Generic player action with full payload.
+    void handlePlayerAction(uint8_t player, ActionKind action,
+                            const ActionPayload& payload);
+
+    // Convenience: action with no payload (READY toggle, START_GAME, etc.).
+    void handlePlayerAction(uint8_t player, ActionKind action) {
+        ActionPayload p;
+        handlePlayerAction(player, action, p);
+    }
+
     void onVertexPresent(uint8_t vertex);
     void onVertexAbsent(uint8_t vertex);
     void onEdgePresent(uint8_t edge);
@@ -48,20 +45,34 @@ public:
     bool pollEffect(Effect& out);
     bool hasEffects() const;
 
-    // ── Observation (mostly for tests / diagnostics) ────────────────────
     uint8_t firstPlayer() const { return first_player_; }
 
 private:
+    // Phase handlers
     void handleLobby_();
     void handleBoardSetup_();
     void handleNumberReveal_();
     void handleInitialPlacement_();
     void handlePlaying_();
     void handleRobber_();
+    void handleDiscard_();
     void handleGameOver_();
 
-    // Apply a validated action from a player whose turn it is right now.
-    void runCurrentAction_();
+    // Action handlers (called from handlePlayerAction).
+    void onBuy_(uint8_t player, uint8_t kind);
+    void onPlaceRobber_(uint8_t player, uint8_t tile);
+    void onStealFrom_(uint8_t player, uint8_t target);
+    void onDiscard_(uint8_t player, const uint8_t counts[5]);
+    void onBankTrade_(uint8_t player, const uint8_t give[5], const uint8_t want[5]);
+    void onTradeOffer_(uint8_t player, uint8_t target,
+                       const uint8_t offer[5], const uint8_t want[5]);
+    void onTradeAccept_(uint8_t acceptor);
+    void onTradeDecline_(uint8_t player);
+    void onTradeCancel_(uint8_t player);
+    void onPlayKnight_(uint8_t player);
+    void onPlayRoadBuilding_(uint8_t player);
+    void onPlayYearOfPlenty_(uint8_t player, uint8_t r1, uint8_t r2);
+    void onPlayMonopoly_(uint8_t player, uint8_t resource);
 
     // Helpers that both validate and commit.
     void tryPlaceSettlement_(uint8_t v, uint8_t player, bool initial);
@@ -69,33 +80,44 @@ private:
     void tryPlaceRoad_(uint8_t e, uint8_t player, bool initial);
     void tryMoveRobber_(uint8_t tile);
 
+    // Robber/discard transitions.
+    void enterRobberOrDiscard_();
+    void afterRobberPlacement_();
+    void distributeInitialResources_(uint8_t player, uint8_t vertex);
+
+    void recomputeAndEmitVp_();
+
     void setPhase_(GamePhase p);
     void pushEffect_(EffectKind k, uint8_t a = 0, uint8_t b = 0, uint8_t c = 0);
+    void emitReject_(uint8_t player, RejectReason r);
 
     // ── Queued inputs from the outside world ────────────────────────────
-    bool       pending_start_game_   = false;
-    bool       pending_next_number_  = false;
-    ActionKind pending_current_      = ActionKind::NONE;
-    uint8_t    pending_current_vp_   = 0;
+    bool          pending_start_game_  = false;
+    bool          pending_next_number_ = false;
+    ActionKind    pending_current_     = ActionKind::NONE;
+    ActionPayload pending_current_payload_;
 
-    // ── Ephemeral FSM state formerly in board/main.cpp ─────────────────
+    // ── Ephemeral FSM state ────────────────────────────────────────────
     uint8_t first_player_     = 0;
     bool    board_setup_done_ = false;
-    uint8_t last_lobby_mask_  = 0xFF;   // force initial emit
+    uint8_t last_lobby_mask_  = 0xFF;
     uint8_t last_reveal_num_  = 0xFF;
+    uint8_t last_emitted_vp_[MAX_PLAYERS] = {0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t last_largest_army_player_ = NO_PLAYER;
+    uint8_t last_longest_road_player_ = NO_PLAYER;
+    uint8_t last_longest_road_length_ = 0;
 
-    // Bitmask of vertices whose settlement was explicitly removed by the
-    // current player during PLAYING phase.  A subsequent onVertexPresent
-    // on a flagged vertex triggers tryUpgradeCity_ instead of a new
-    // settlement placement or a rejection.  Cleared on every phase change
-    // and on END_TURN so stale flags never cross turn boundaries.
+    // During the initial-placement second round, track which vertex each
+    // player just placed so PLACE_DONE can distribute starting resources.
+    uint8_t last_initial_vertex_ = NO_PLAYER;
+
     // 54 vertices fit in 64 bits.
     uint64_t pending_city_mask_ = 0;
 
-    // ── Effect ring buffer (power-of-two for cheap masking) ─────────────
+    // Effect ring buffer.
     Effect  effects_[EFFECT_QUEUE_SIZE];
-    uint8_t effect_head_ = 0;   // read index
-    uint8_t effect_tail_ = 0;   // write index
+    uint8_t effect_head_ = 0;
+    uint8_t effect_tail_ = 0;
 };
 
 }  // namespace core

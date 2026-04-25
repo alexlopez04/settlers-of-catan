@@ -92,6 +92,7 @@ static catan_GamePhase phaseToProto(GamePhase p) {
         case GamePhase::INITIAL_PLACEMENT: return catan_GamePhase_PHASE_INITIAL_PLACEMENT;
         case GamePhase::PLAYING:           return catan_GamePhase_PHASE_PLAYING;
         case GamePhase::ROBBER:            return catan_GamePhase_PHASE_ROBBER;
+        case GamePhase::DISCARD:           return catan_GamePhase_PHASE_DISCARD;
         case GamePhase::GAME_OVER:         return catan_GamePhase_PHASE_GAME_OVER;
     }
     return catan_GamePhase_PHASE_LOBBY;
@@ -99,15 +100,30 @@ static catan_GamePhase phaseToProto(GamePhase p) {
 
 static core::ActionKind toActionKind(catan_PlayerAction a) {
     switch (a) {
-        case catan_PlayerAction_ACTION_READY:       return core::ActionKind::READY;
-        case catan_PlayerAction_ACTION_START_GAME:  return core::ActionKind::START_GAME;
-        case catan_PlayerAction_ACTION_NEXT_NUMBER: return core::ActionKind::NEXT_NUMBER;
-        case catan_PlayerAction_ACTION_PLACE_DONE:  return core::ActionKind::PLACE_DONE;
-        case catan_PlayerAction_ACTION_ROLL_DICE:   return core::ActionKind::ROLL_DICE;
-        case catan_PlayerAction_ACTION_END_TURN:    return core::ActionKind::END_TURN;
-        case catan_PlayerAction_ACTION_SKIP_ROBBER: return core::ActionKind::SKIP_ROBBER;
-        case catan_PlayerAction_ACTION_REPORT:      return core::ActionKind::REPORT;
-        default:                                    return core::ActionKind::NONE;
+        case catan_PlayerAction_ACTION_READY:              return core::ActionKind::READY;
+        case catan_PlayerAction_ACTION_START_GAME:         return core::ActionKind::START_GAME;
+        case catan_PlayerAction_ACTION_NEXT_NUMBER:        return core::ActionKind::NEXT_NUMBER;
+        case catan_PlayerAction_ACTION_PLACE_DONE:         return core::ActionKind::PLACE_DONE;
+        case catan_PlayerAction_ACTION_ROLL_DICE:          return core::ActionKind::ROLL_DICE;
+        case catan_PlayerAction_ACTION_END_TURN:           return core::ActionKind::END_TURN;
+        case catan_PlayerAction_ACTION_SKIP_ROBBER:        return core::ActionKind::SKIP_ROBBER;
+        case catan_PlayerAction_ACTION_BUY_ROAD:           return core::ActionKind::BUY_ROAD;
+        case catan_PlayerAction_ACTION_BUY_SETTLEMENT:     return core::ActionKind::BUY_SETTLEMENT;
+        case catan_PlayerAction_ACTION_BUY_CITY:           return core::ActionKind::BUY_CITY;
+        case catan_PlayerAction_ACTION_BUY_DEV_CARD:       return core::ActionKind::BUY_DEV_CARD;
+        case catan_PlayerAction_ACTION_PLACE_ROBBER:       return core::ActionKind::PLACE_ROBBER;
+        case catan_PlayerAction_ACTION_STEAL_FROM:         return core::ActionKind::STEAL_FROM;
+        case catan_PlayerAction_ACTION_DISCARD:            return core::ActionKind::DISCARD;
+        case catan_PlayerAction_ACTION_BANK_TRADE:         return core::ActionKind::BANK_TRADE;
+        case catan_PlayerAction_ACTION_TRADE_OFFER:        return core::ActionKind::TRADE_OFFER;
+        case catan_PlayerAction_ACTION_TRADE_ACCEPT:       return core::ActionKind::TRADE_ACCEPT;
+        case catan_PlayerAction_ACTION_TRADE_DECLINE:      return core::ActionKind::TRADE_DECLINE;
+        case catan_PlayerAction_ACTION_TRADE_CANCEL:       return core::ActionKind::TRADE_CANCEL;
+        case catan_PlayerAction_ACTION_PLAY_KNIGHT:        return core::ActionKind::PLAY_KNIGHT;
+        case catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING: return core::ActionKind::PLAY_ROAD_BUILDING;
+        case catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY: return core::ActionKind::PLAY_YEAR_OF_PLENTY;
+        case catan_PlayerAction_ACTION_PLAY_MONOPOLY:      return core::ActionKind::PLAY_MONOPOLY;
+        default:                                           return core::ActionKind::NONE;
     }
 }
 
@@ -125,6 +141,16 @@ static const char* rejectReasonName(core::RejectReason r) {
         case core::RejectReason::NOT_MY_SETTLEMENT:        return "NOT_MY_SETTLEMENT";
         case core::RejectReason::ROBBER_SAME_TILE:         return "ROBBER_SAME";
         case core::RejectReason::INVALID_INDEX:            return "INVALID_INDEX";
+        case core::RejectReason::NOT_PURCHASED:            return "NOT_PURCHASED";
+        case core::RejectReason::INSUFFICIENT_RESOURCES:   return "NO_RES";
+        case core::RejectReason::PIECE_LIMIT_REACHED:      return "PIECE_LIMIT";
+        case core::RejectReason::BANK_DEPLETED:            return "BANK_DEPLETED";
+        case core::RejectReason::INVALID_TRADE:            return "INVALID_TRADE";
+        case core::RejectReason::NO_PENDING_TRADE:         return "NO_TRADE";
+        case core::RejectReason::DEV_CARD_NOT_AVAILABLE:   return "DEV_NA";
+        case core::RejectReason::DEV_DECK_EMPTY:           return "DECK_EMPTY";
+        case core::RejectReason::INVALID_DISCARD:          return "BAD_DISCARD";
+        case core::RejectReason::NOT_ELIGIBLE_TARGET:      return "BAD_TARGET";
         default:                                           return "NONE";
     }
 }
@@ -146,14 +172,18 @@ static void applyEffect(const core::Effect& ef) {
         }
         case EffectKind::LOBBY_MASK_CHANGED: {
             uint8_t mask = ef.a;
-            led::setAllTiles(CRGB(20, 20, 40));
-            for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-                if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
-            }
-            led::show();
             LOGI("LOBBY", "connected mask=0x%02X (%u players, ready=0x%02X)",
                  (unsigned)mask, (unsigned)game::numPlayers(),
                  (unsigned)game::readyMask());
+            // Only update LEDs in LOBBY phase — this effect can be queued
+            // from an earlier phase and must not override gameplay lighting.
+            if (game::phase() == GamePhase::LOBBY) {
+                led::setAllTiles(CRGB(20, 20, 40));
+                for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+                    if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
+                }
+                led::show();
+            }
             break;
         }
         case EffectKind::BOARD_RANDOMIZED: {
@@ -242,6 +272,64 @@ static void applyEffect(const core::Effect& ef) {
             LOGI("ROBBER", "tile %u -> %u", (unsigned)old_t, (unsigned)new_t);
             break;
         }
+        case EffectKind::RESOURCES_DISTRIBUTED:
+            LOGI("DIST", "roll=%u dealt=%u", (unsigned)ef.a, (unsigned)ef.b);
+            break;
+        case EffectKind::DISCARD_REQUIRED:
+            LOGI("DISC", "mask=0x%02X", (unsigned)ef.a);
+            break;
+        case EffectKind::DISCARD_COMPLETED:
+            LOGI("DISC", "P%u discarded %u", (unsigned)(ef.a + 1), (unsigned)ef.b);
+            break;
+        case EffectKind::STEAL_OCCURRED:
+            LOGI("STEAL", "P%u stole res=%u from P%u",
+                 (unsigned)(ef.a + 1), (unsigned)ef.c, (unsigned)(ef.b + 1));
+            break;
+        case EffectKind::DEV_CARD_DRAWN:
+            LOGI("DEV", "P%u drew card type=%u", (unsigned)(ef.a + 1), (unsigned)ef.b);
+            break;
+        case EffectKind::KNIGHT_PLAYED:
+            LOGI("DEV", "P%u played KNIGHT", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::ROAD_BUILDING_PLAYED:
+            LOGI("DEV", "P%u played ROAD_BUILDING", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::YEAR_OF_PLENTY_PLAYED:
+            LOGI("DEV", "P%u played YEAR_OF_PLENTY", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::MONOPOLY_PLAYED:
+            LOGI("DEV", "P%u monopolized res=%u (%u cards)",
+                 (unsigned)(ef.a + 1), (unsigned)ef.b, (unsigned)ef.c);
+            break;
+        case EffectKind::LARGEST_ARMY_CHANGED:
+            LOGI("BONUS", "Largest Army -> P%u", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::LONGEST_ROAD_CHANGED:
+            LOGI("BONUS", "Longest Road -> P%u (len=%u)",
+                 (unsigned)(ef.a + 1), (unsigned)ef.b);
+            break;
+        case EffectKind::PURCHASE_MADE:
+            LOGI("BUY", "P%u kind=%u", (unsigned)(ef.a + 1), (unsigned)ef.b);
+            break;
+        case EffectKind::TRADE_OFFERED:
+            LOGI("TRADE", "P%u -> P%u", (unsigned)(ef.a + 1), (unsigned)(ef.b + 1));
+            break;
+        case EffectKind::TRADE_ACCEPTED:
+            LOGI("TRADE", "P%u accepted by P%u",
+                 (unsigned)(ef.a + 1), (unsigned)(ef.b + 1));
+            break;
+        case EffectKind::TRADE_DECLINED:
+            LOGI("TRADE", "P%u declined", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::TRADE_CANCELLED:
+            LOGI("TRADE", "cancelled");
+            break;
+        case EffectKind::BANK_TRADED:
+            LOGI("BANK", "P%u traded with bank", (unsigned)(ef.a + 1));
+            break;
+        case EffectKind::VP_CHANGED:
+            LOGI("VP", "P%u public=%u", (unsigned)(ef.a + 1), (unsigned)ef.b);
+            break;
         case EffectKind::WINNER: {
             uint8_t w = ef.a;
             LOGI("WINNER", "P%u reached %u VP", (unsigned)(w + 1), (unsigned)VP_TO_WIN);
@@ -294,7 +382,7 @@ static void pumpSensors() {
 // ---------------------------------------------------------------------------
 // UART mega_link → game (PlayerInput + PlayerPresence dispatch)
 // ---------------------------------------------------------------------------
-static void handlePlayerInputFrame(const uint8_t* payload, uint8_t len) {
+static void handlePlayerInputFrame(const uint8_t* payload, uint16_t len) {
     catan_PlayerInput in = catan_PlayerInput_init_zero;
     if (!catan_decode_player_input(payload, len, &in)) {
         LOGW("LINK", "PlayerInput decode fail (len=%u)", (unsigned)len);
@@ -304,31 +392,32 @@ static void handlePlayerInputFrame(const uint8_t* payload, uint8_t len) {
         LOGW("LINK", "PlayerInput bad player_id=%u", (unsigned)in.player_id);
         return;
     }
-    LOGI("INPUT", "P%u action=%u vp=%u client='%s'",
-         (unsigned)(in.player_id + 1), (unsigned)in.action,
-         (unsigned)in.vp, in.client_id);
+    LOGI("INPUT", "P%u action=%u client='%s'",
+         (unsigned)(in.player_id + 1), (unsigned)in.action, in.client_id);
 
-    // Forward REPORT vp via the dedicated REPORT path; for READY we
-    // overload `vp` as the new ready bit (1 = ready, 0 = unready).
-    uint8_t aux_vp = in.vp & 0xFF;
-    if (in.action == catan_PlayerAction_ACTION_READY) {
-        // The app sends ACTION_READY with no payload — treat as toggle:
-        // if vp==0 it means "set unready", any non-zero means "set ready".
-        // For simplicity we toggle here so the same button works both ways.
-        if (in.vp == 0) aux_vp = game::playerReady(in.player_id) ? 0 : 1;
-    }
-    // Persist self-reported resources so reconnecting clients can restore them.
-    if (in.action == catan_PlayerAction_ACTION_REPORT) {
-        game::setReportedRes(in.player_id, 0, (uint8_t)(in.res_lumber & 0xFF));
-        game::setReportedRes(in.player_id, 1, (uint8_t)(in.res_wool   & 0xFF));
-        game::setReportedRes(in.player_id, 2, (uint8_t)(in.res_grain  & 0xFF));
-        game::setReportedRes(in.player_id, 3, (uint8_t)(in.res_brick  & 0xFF));
-        game::setReportedRes(in.player_id, 4, (uint8_t)(in.res_ore    & 0xFF));
-    }
-    sm.handlePlayerAction(in.player_id, toActionKind(in.action), aux_vp);
+    core::ActionPayload p;
+    p.res[0]  = (uint8_t)(in.res_lumber & 0xFF);
+    p.res[1]  = (uint8_t)(in.res_wool   & 0xFF);
+    p.res[2]  = (uint8_t)(in.res_grain  & 0xFF);
+    p.res[3]  = (uint8_t)(in.res_brick  & 0xFF);
+    p.res[4]  = (uint8_t)(in.res_ore    & 0xFF);
+    p.want[0] = (uint8_t)(in.want_lumber & 0xFF);
+    p.want[1] = (uint8_t)(in.want_wool   & 0xFF);
+    p.want[2] = (uint8_t)(in.want_grain  & 0xFF);
+    p.want[3] = (uint8_t)(in.want_brick  & 0xFF);
+    p.want[4] = (uint8_t)(in.want_ore    & 0xFF);
+    p.target      = (uint8_t)(in.target_player & 0xFF);
+    p.robber_tile = (uint8_t)(in.robber_tile   & 0xFF);
+    p.monopoly_res = (uint8_t)(in.monopoly_res & 0xFF);
+    p.card_res_1  = (uint8_t)(in.card_res_1    & 0xFF);
+    p.card_res_2  = (uint8_t)(in.card_res_2    & 0xFF);
+    // READY: empty payload means "toggle".
+    p.aux = 0xFF;
+
+    sm.handlePlayerAction(in.player_id, toActionKind(in.action), p);
 }
 
-static void handlePresenceFrame(const uint8_t* payload, uint8_t len) {
+static void handlePresenceFrame(const uint8_t* payload, uint16_t len) {
     catan_PlayerPresence pres = catan_PlayerPresence_init_zero;
     if (!catan_decode_player_presence(payload, len, &pres)) {
         LOGW("LINK", "PlayerPresence decode fail (len=%u)", (unsigned)len);
@@ -342,11 +431,17 @@ static void handlePresenceFrame(const uint8_t* payload, uint8_t len) {
         if (c) highest = (uint8_t)(p + 1);
         if (!c) game::setPlayerReady(p, false);   // disconnect drops ready
     }
-    game::setNumPlayers(highest);
-    LOGI("PRES", "mask=0x%02X num_players=%u", (unsigned)mask, (unsigned)highest);
+    // Only update the player count in LOBBY — once a game is in progress the
+    // hub may send a transient mask=0x00 (e.g. on reboot) that must not
+    // corrupt num_players (which nextTurn() uses for modulo arithmetic).
+    if (game::phase() == GamePhase::LOBBY) {
+        game::setNumPlayers(highest);
+    }
+    LOGI("PRES", "mask=0x%02X num_players=%u phase=%s",
+         (unsigned)mask, (unsigned)game::numPlayers(), game::phaseName(game::phase()));
 }
 
-static void onLinkFrame(uint8_t type, const uint8_t* payload, uint8_t len) {
+static void onLinkFrame(uint8_t type, const uint8_t* payload, uint16_t len) {
     switch (type) {
         case CATAN_MSG_PLAYER_INPUT:    handlePlayerInputFrame(payload, len); break;
         case CATAN_MSG_PLAYER_PRESENCE: handlePresenceFrame(payload, len);    break;
@@ -385,7 +480,7 @@ static void broadcastBoardState() {
     }
 
     s.vp_count = MAX_PLAYERS;
-    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.vp[p] = game::reportedVp(p);
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.vp[p] = game::publicVp(p);
 
     s.ready_count = MAX_PLAYERS;
     for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.ready[p] = game::playerReady(p) ? 1 : 0;
@@ -396,11 +491,11 @@ static void broadcastBoardState() {
     s.res_brick_count  = MAX_PLAYERS;
     s.res_ore_count    = MAX_PLAYERS;
     for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
-        s.res_lumber[p] = game::reportedRes(p, 0);
-        s.res_wool[p]   = game::reportedRes(p, 1);
-        s.res_grain[p]  = game::reportedRes(p, 2);
-        s.res_brick[p]  = game::reportedRes(p, 3);
-        s.res_ore[p]    = game::reportedRes(p, 4);
+        s.res_lumber[p] = game::resCount(p, Res::LUMBER);
+        s.res_wool[p]   = game::resCount(p, Res::WOOL);
+        s.res_grain[p]  = game::resCount(p, Res::GRAIN);
+        s.res_brick[p]  = game::resCount(p, Res::BRICK);
+        s.res_ore[p]    = game::resCount(p, Res::ORE);
     }
 
     // Single-shot placement rejection for the current player.
@@ -445,6 +540,64 @@ static void broadcastBoardState() {
         }
     }
 
+    // ── Dev cards / knights / road / largest army ─────────────────────────
+    s.dev_cards.size = MAX_PLAYERS * 5;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
+        s.dev_cards.bytes[p * 5 + 0] = game::devCardCount(p, Dev::KNIGHT);
+        s.dev_cards.bytes[p * 5 + 1] = game::devCardCount(p, Dev::VP);
+        s.dev_cards.bytes[p * 5 + 2] = game::devCardCount(p, Dev::ROAD_BUILDING);
+        s.dev_cards.bytes[p * 5 + 3] = game::devCardCount(p, Dev::YEAR_OF_PLENTY);
+        s.dev_cards.bytes[p * 5 + 4] = game::devCardCount(p, Dev::MONOPOLY);
+    }
+    s.knights_played.size = MAX_PLAYERS;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.knights_played.bytes[p] = game::knightsPlayed(p);
+    s.largest_army_player  = (game::largestArmyPlayer() == NO_PLAYER) ? 0xFF : game::largestArmyPlayer();
+    s.longest_road_player  = (game::longestRoadPlayer() == NO_PLAYER) ? 0xFF : game::longestRoadPlayer();
+    s.longest_road_length  = game::longestRoadLength();
+    s.dev_deck_remaining   = game::devDeckRemaining();
+    s.card_played_this_turn = game::cardPlayedThisTurn();
+
+    // ── Discard / steal masks ─────────────────────────────────────────────
+    s.discard_required_mask = game::discardRequiredMask();
+    s.discard_required_count.size = MAX_PLAYERS;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.discard_required_count.bytes[p] = game::discardRequiredCount(p);
+    s.steal_eligible_mask = game::stealEligibleMask();
+
+    // ── Pending purchases / free roads ─────────────────────────────────────
+    s.pending_road_buy.size       = MAX_PLAYERS;
+    s.pending_settlement_buy.size = MAX_PLAYERS;
+    s.pending_city_buy.size       = MAX_PLAYERS;
+    s.free_roads_remaining.size   = MAX_PLAYERS;
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
+        s.pending_road_buy.bytes[p]       = game::pendingRoadBuy(p);
+        s.pending_settlement_buy.bytes[p] = game::pendingSettlementBuy(p);
+        s.pending_city_buy.bytes[p]       = game::pendingCityBuy(p);
+        s.free_roads_remaining.bytes[p]   = game::freeRoadsRemaining(p);
+    }
+
+    // ── Trade ──────────────────────────────────────────────────────────────
+    {
+        const auto& t = game::pendingTrade();
+        s.trade_from_player = (t.from == NO_PLAYER) ? 0xFF : t.from;
+        s.trade_to_player   = (t.to   == NO_PLAYER) ? 0xFF : t.to;
+        s.trade_offer.size  = 5;
+        s.trade_want.size   = 5;
+        for (uint8_t i = 0; i < 5; ++i) {
+            s.trade_offer.bytes[i] = t.offer[i];
+            s.trade_want.bytes[i]  = t.want[i];
+        }
+    }
+
+    // ── Bank supply / last distribution ────────────────────────────────────
+    s.bank_supply.size = 5;
+    for (uint8_t r = 0; r < 5; ++r) s.bank_supply.bytes[r] = game::bankSupply((Res)r);
+
+    {
+        const uint8_t* dist = game::lastDistribution();
+        s.last_distribution.size = MAX_PLAYERS * 5;
+        for (uint8_t i = 0; i < MAX_PLAYERS * 5; ++i) s.last_distribution.bytes[i] = dist[i];
+    }
+
     uint8_t buf[CATAN_MAX_PAYLOAD];
     size_t n = catan_encode_board_state(&s, buf, sizeof(buf));
     if (n == 0) {
@@ -454,7 +607,7 @@ static void broadcastBoardState() {
     // Clear the single-shot rejection field after it has been encoded so
     // subsequent broadcasts carry 0 (no rejection).
     game::clearLastRejectReason();
-    mega_link::send(CATAN_MSG_BOARD_STATE, buf, (uint8_t)n);
+    mega_link::send(CATAN_MSG_BOARD_STATE, buf, (uint16_t)n);
 }
 
 // =============================================================================

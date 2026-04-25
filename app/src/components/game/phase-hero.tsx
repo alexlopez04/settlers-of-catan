@@ -276,7 +276,7 @@ export function PhaseHero(p: HeroProps) {
     case GamePhase.LOBBY: {
       const mask      = gameState?.connectedMask ?? 0;
       const connected = [0, 1, 2, 3].map(i => Boolean(mask & (1 << i)));
-      const needMore  = connectedCount < 2;
+      const needMore  = connectedCount < 1;
       return (
         <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
           <Text style={[s.heroTitle, { color: theme.text }]}>Waiting for players</Text>
@@ -286,11 +286,11 @@ export function PhaseHero(p: HeroProps) {
             ))}
           </View>
           <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-            {connectedCount} of 4 connected
+            {connectedCount} of 4 connected — need at least 1 to start
           </Text>
           {needMore && (
             <Text style={[s.lobbyHint, { color: theme.textSecondary }]}>
-              Need at least 2 players to start
+              Need at least 1 player to start (up to 4)
             </Text>
           )}
         </View>

@@ -38,7 +38,7 @@ void onBleInput(const catan_PlayerInput& in) {
         LOGE("HUB", "encode PlayerInput fail");
         return;
     }
-    bool ok = mega_link::send(CATAN_MSG_PLAYER_INPUT, payload, (uint8_t)n);
+    bool ok = mega_link::send(CATAN_MSG_PLAYER_INPUT, payload, (uint16_t)n);
     LOGI("HUB", "input -> Mega slot=%u action=%u%s",
          (unsigned)in.player_id, (unsigned)in.action, ok ? "" : " [DROPPED]");
 }
@@ -67,7 +67,7 @@ void sendPresence() {
         LOGE("HUB", "encode PlayerPresence fail");
         return;
     }
-    bool ok = mega_link::send(CATAN_MSG_PLAYER_PRESENCE, payload, (uint8_t)n);
+    bool ok = mega_link::send(CATAN_MSG_PLAYER_PRESENCE, payload, (uint16_t)n);
     LOGI("HUB", "presence -> Mega mask=0x%02X count=%u%s",
          (unsigned)pres.connected_mask, (unsigned)slots::connectedCount(),
          ok ? "" : " [DROPPED]");
@@ -78,7 +78,7 @@ void sendPresence() {
 void onBlePresenceChanged() { sendPresence(); }
 
 // ── Inbound: UART -> BLE (only BoardState is expected from the Mega) ──────
-void onLinkFrame(uint8_t type, const uint8_t* payload, uint8_t len) {
+void onLinkFrame(uint8_t type, const uint8_t* payload, uint16_t len) {
     switch (type) {
         case CATAN_MSG_BOARD_STATE: {
             // Validate before pushing so the phone never sees a wrong-version

@@ -11,12 +11,12 @@
 namespace {
 
 // Receive state machine.
-enum class RxState : uint8_t { WAIT_MAGIC, WAIT_TYPE, WAIT_LEN, WAIT_PAYLOAD, WAIT_CRC };
+enum class RxState : uint8_t { WAIT_MAGIC, WAIT_TYPE, WAIT_LEN_LO, WAIT_LEN_HI, WAIT_PAYLOAD, WAIT_CRC };
 
 RxState              rx_state = RxState::WAIT_MAGIC;
 uint8_t              rx_type  = 0;
-uint8_t              rx_len   = 0;
-uint8_t              rx_pos   = 0;
+uint16_t             rx_len   = 0;
+uint16_t             rx_pos   = 0;
 uint8_t              rx_buf[CATAN_MAX_PAYLOAD];
 mega_link::FrameHandler   rx_cb    = nullptr;
 mega_link::Stats          g_stats  = {};
@@ -36,11 +36,16 @@ void feed(uint8_t b) {
 
         case RxState::WAIT_TYPE:
             rx_type  = b;
-            rx_state = RxState::WAIT_LEN;
+            rx_state = RxState::WAIT_LEN_LO;
             break;
 
-        case RxState::WAIT_LEN:
-            rx_len = b;
+        case RxState::WAIT_LEN_LO:
+            rx_len   = (uint16_t)b;
+            rx_state = RxState::WAIT_LEN_HI;
+            break;
+
+        case RxState::WAIT_LEN_HI:
+            rx_len |= ((uint16_t)b << 8);
             if (rx_len > CATAN_MAX_PAYLOAD) {
                 g_stats.rx_overruns++;
                 resetRx();
@@ -58,10 +63,12 @@ void feed(uint8_t b) {
             break;
 
         case RxState::WAIT_CRC: {
-            uint8_t hdr[2] = { rx_type, rx_len };
-            uint8_t crc    = catan_crc8(hdr, 2);
+            uint8_t hdr[3] = { rx_type,
+                               (uint8_t)(rx_len & 0xFFu),
+                               (uint8_t)((rx_len >> 8) & 0xFFu) };
+            uint8_t crc    = catan_crc8(hdr, 3);
             // Continue CRC over payload.
-            for (uint8_t i = 0; i < rx_len; ++i) {
+            for (uint16_t i = 0; i < rx_len; ++i) {
                 crc ^= rx_buf[i];
                 for (uint8_t j = 0; j < 8; ++j) {
                     crc = (crc & 0x80u) ? (uint8_t)((crc << 1) ^ 0x07u)
@@ -101,7 +108,7 @@ void poll() {
     }
 }
 
-bool send(uint8_t type, const uint8_t* payload, uint8_t payload_len) {
+bool send(uint8_t type, const uint8_t* payload, uint16_t payload_len) {
     uint8_t frame[CATAN_MAX_FRAME];
     size_t n = catan_wire_pack(type, payload, payload_len, frame, sizeof(frame));
     if (n == 0) {

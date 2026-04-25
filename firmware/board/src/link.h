@@ -12,11 +12,11 @@
 
 namespace mega_link {
 
-typedef void (*FrameHandler)(uint8_t type, const uint8_t* payload, uint8_t len);
+typedef void (*FrameHandler)(uint8_t type, const uint8_t* payload, uint16_t len);
 
 void init(FrameHandler on_frame);
 void poll();
-bool send(uint8_t type, const uint8_t* payload, uint8_t payload_len);
+bool send(uint8_t type, const uint8_t* payload, uint16_t payload_len);
 
 struct Stats {
     uint32_t rx_bytes;
