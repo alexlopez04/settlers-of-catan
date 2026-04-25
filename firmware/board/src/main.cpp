@@ -1,13 +1,19 @@
 // =============================================================================
 // main.cpp — Settlers of Catan: Arduino Mega central board controller.
 //
-//   Mega  <--I2C(100k)-->  PCF8574 sensor expanders   (game presence input)
-//   Mega  <--Serial1-->    ESP32-C6 BLE hub           (player I/O)
+//   Mega  <--Serial1-->    ESP32-C6 BLE hub    (player I/O)
+//   Mega  <--Serial2-->    Raspberry Pi CV     (piece detection, ~2 Hz)
 //
-// The Mega owns the game FSM, sensors, and LEDs. The hub owns BLE — it
-// reports who is connected (PlayerPresence) and forwards each phone's
-// PlayerInput. The Mega broadcasts BoardState to the hub on a fixed
-// 200 ms cadence; the hub fans those out to every connected mobile.
+// The Mega owns the game FSM and LEDs.  Piece placement is detected by a
+// Raspberry Pi running vision/pi_serial.py, which captures a top-down camera
+// image, runs BoardDetector, and sends CATAN_MSG_CV_BOARD_STATE frames over
+// Serial2.  sensor_manager.cpp translates those frames into the same
+// vertexPresent / edgePresent API that pumpSensors() uses.
+//
+// The BLE hub owns BLE — it reports who is connected (PlayerPresence) and
+// forwards each phone's PlayerInput. The Mega broadcasts BoardState to the
+// hub on a fixed 200 ms cadence; the hub fans those out to every connected
+// mobile.
 //
 // All game logic — phases, placement, dice, turn order — lives in
 // firmware/board/src/core/ and is host-compilable for native simulation
@@ -15,7 +21,6 @@
 // =============================================================================
 
 #include <Arduino.h>
-#include <Wire.h>
 
 #include "config.h"
 #include "catan_log.h"
@@ -25,6 +30,7 @@
 #include "board_topology.h"
 #include "led_manager.h"
 #include "sensor_manager.h"
+#include "cv_link.h"
 #include "game_state.h"
 #include "dice.h"
 #include "proto/catan.pb.h"
@@ -471,36 +477,13 @@ void setup() {
     Serial.println(CATAN_PROTO_VERSION);
     Serial.println(F("======================================"));
 
-    LOGI("BOOT", "Wire.begin() @100kHz (sensor bus only)");
-    Serial.flush();
-    Wire.begin();
-    Wire.setClock(100000);
-    Wire.setWireTimeout(25000UL, /*reset_on_timeout=*/true);
-
     LOGI("BOOT", "led::init");
     Serial.flush();
     led::init();
 
-    LOGI("BOOT", "sensor::init (probe %u expanders)", (unsigned)EXPANDER_COUNT);
+    LOGI("BOOT", "sensor::init (CV mode — Serial2 to Raspberry Pi)");
     Serial.flush();
-    {
-        uint8_t found = 0;
-        for (uint8_t i = 0; i < EXPANDER_COUNT; ++i) {
-            Wire.beginTransmission(EXPANDER_ADDRS[i]);
-            uint8_t rc = Wire.endTransmission();
-            if (rc == 0) {
-                LOGI("I2C", "  expander 0x%02X OK", (unsigned)EXPANDER_ADDRS[i]);
-                found++;
-            } else {
-                LOGW("I2C", "  expander 0x%02X missing (rc=%u)",
-                     (unsigned)EXPANDER_ADDRS[i], (unsigned)rc);
-            }
-            Serial.flush();
-        }
-        LOGI("I2C", "probe done: %u/%u expanders present",
-             (unsigned)found, (unsigned)EXPANDER_COUNT);
-    }
-    sensor::init();
+    sensor::init();  // opens Serial2 via cv_link::init()
 
     uint16_t dice_seed = (uint16_t)analogRead(A0);
     LOGI("BOOT", "dice::init seed=%u", (unsigned)dice_seed);
@@ -531,17 +514,24 @@ void setup() {
 }
 
 static void logHeartbeat() {
-    const mega_link::Stats& s = mega_link::stats();
-    LOGI("HB", "phase=%s loops=%lu mask=0x%02X ready=0x%02X uart rx=%lu fr=%lu bad_crc=%lu tx=%lu drop=%lu",
+    const mega_link::Stats& hub = mega_link::stats();
+    const cv_link::Stats&   cv  = cv_link::stats();
+    LOGI("HB",
+         "phase=%s loops=%lu mask=0x%02X ready=0x%02X "
+         "hub rx=%lu fr=%lu bad_crc=%lu tx=%lu drop=%lu | "
+         "cv rx=%lu fr=%lu bad_crc=%lu",
          game::phaseName(game::phase()),
          (unsigned long)loop_count,
          (unsigned)game::connectedMask(),
          (unsigned)game::readyMask(),
-         (unsigned long)s.rx_bytes,
-         (unsigned long)s.rx_frames,
-         (unsigned long)s.rx_bad_crc,
-         (unsigned long)s.tx_frames,
-         (unsigned long)s.tx_dropped);
+         (unsigned long)hub.rx_bytes,
+         (unsigned long)hub.rx_frames,
+         (unsigned long)hub.rx_bad_crc,
+         (unsigned long)hub.tx_frames,
+         (unsigned long)hub.tx_dropped,
+         (unsigned long)cv.rx_bytes,
+         (unsigned long)cv.rx_frames,
+         (unsigned long)cv.rx_bad_crc);
 }
 
 void loop() {

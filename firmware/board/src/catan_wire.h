@@ -37,6 +37,17 @@ extern "C" {
 #define CATAN_MSG_BOARD_STATE     0x01u
 #define CATAN_MSG_PLAYER_INPUT    0x02u
 #define CATAN_MSG_PLAYER_PRESENCE 0x03u
+// 0x04: CV board state — Raspberry Pi → Mega (Serial2).
+// Payload is exactly CATAN_CV_PAYLOAD_SIZE bytes:
+//   bytes  0..26 — vertex ownership nibbles (54 vertices, 2 per byte)
+//   bytes 27..62 — edge ownership nibbles   (72 edges,   2 per byte)
+// Nibble encoding:
+//   0x0..0x3 = piece owned by player 0..3
+//   0xF      = empty
+#define CATAN_MSG_CV_BOARD_STATE  0x04u
+#define CATAN_CV_VERTEX_BYTES     27u   // ceil(54/2)
+#define CATAN_CV_EDGE_BYTES       36u   // ceil(72/2)
+#define CATAN_CV_PAYLOAD_SIZE     63u   // VERTEX_BYTES + EDGE_BYTES
 
 // Payload + framing sizes. Picked to comfortably exceed the largest
 // nanopb-encoded message we currently emit; bump if you add fat fields.

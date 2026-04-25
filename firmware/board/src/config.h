@@ -9,8 +9,10 @@
 // ── Serial ───────────────────────────────────────────────────────────────────
 // Serial  (USB)  — debug log
 // Serial1 (TX1=18 / RX1=19) — framed mega_link to the ESP32-C6 BLE hub
-static constexpr uint32_t SERIAL_BAUD = 115200;
-static constexpr uint32_t LINK_BAUD   = 115200;
+// Serial2 (TX2=16 / RX2=17) — cv_link to Raspberry Pi CV detector
+static constexpr uint32_t SERIAL_BAUD  = 115200;
+static constexpr uint32_t LINK_BAUD    = 115200;
+static constexpr uint32_t CV_LINK_BAUD = 115200;
 
 // ── Addressable LEDs (WS2812B) ──────────────────────────────────────────────
 static constexpr uint8_t  LED_DATA_PIN    = 3;
@@ -18,17 +20,6 @@ static constexpr uint16_t TOTAL_LED_COUNT = 57;  // 19×2 + 9×1 + 10 spare
 
 static constexpr uint8_t MAX_LEDS_PER_TILE = 4;
 static constexpr uint8_t MAX_LEDS_PER_PORT = 2;
-
-// ── I2C GPIO Expanders (PCF8574) — sensor input ─────────────────────────────
-// The Mega is the I²C master for the eight PCF8574 expanders only. The
-// player BLE hub no longer shares this bus; it talks to the Mega over
-// UART (Serial1). Bus speed remains 100 kHz with 4.7 kΩ pull-ups on the
-// 3.3 V side of the level shifter.
-static constexpr uint8_t EXPANDER_COUNT = 8;
-static constexpr uint8_t EXPANDER_ADDRS[EXPANDER_COUNT] = {
-    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
-};
-static constexpr uint8_t PINS_PER_EXPANDER = 8;
 
 // ── Players ─────────────────────────────────────────────────────────────────
 // Logical seat count. The single ESP32-C6 BLE hub assigns each connecting
@@ -44,6 +35,8 @@ static constexpr uint8_t VERTEX_COUNT = 54;
 static constexpr uint8_t EDGE_COUNT   = 72;
 
 // ── Timing ──────────────────────────────────────────────────────────────────
+// CV frames arrive at ~2 Hz from the Pi.  The main loop polls at SENSOR_POLL_MS
+// — most iterations the cv_link will have nothing new and return immediately.
 static constexpr uint32_t SENSOR_POLL_MS     = 20;
 static constexpr uint32_t STATE_BROADCAST_MS = 200;   // BoardState push cadence
 
