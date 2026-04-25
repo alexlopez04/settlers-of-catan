@@ -23,16 +23,18 @@ SensorState vertex_state[VERTEX_COUNT];
 SensorState edge_state[EDGE_COUNT];
 SensorState tile_state[TILE_COUNT];
 
-// Cache of the last byte read from each I2C expander.
-uint8_t expander_cache[EXPANDER_COUNT];
+// Cache of the last 16-bit word read from each I2C expander.
+uint16_t expander_cache[EXPANDER_COUNT];
 
-uint8_t readExpander(uint8_t expander_idx) {
-    if (expander_idx >= EXPANDER_COUNT) return 0xFF;
-    Wire.requestFrom(EXPANDER_ADDRS[expander_idx], (uint8_t)1);
-    if (Wire.available()) {
-        return Wire.read();
+uint16_t readExpander(uint8_t expander_idx) {
+    if (expander_idx >= EXPANDER_COUNT) return 0xFFFF;
+    Wire.requestFrom(EXPANDER_ADDRS[expander_idx], (uint8_t)2);
+    if (Wire.available() >= 2) {
+        uint8_t lo = Wire.read();
+        uint8_t hi = Wire.read();
+        return (uint16_t)lo | ((uint16_t)hi << 8);
     }
-    return 0xFF;  // All high = nothing detected (pull-up default)
+    return 0xFFFF;  // All high = nothing detected (pull-up default)
 }
 
 bool readSensor(const SensorPin& sp) {
@@ -42,7 +44,7 @@ bool readSensor(const SensorPin& sp) {
     }
     // I2C expander — read the bit from cache
     if (sp.expander_idx >= EXPANDER_COUNT || sp.pin >= PINS_PER_EXPANDER) return false;
-    return !(expander_cache[sp.expander_idx] & (1 << sp.pin));  // Active-low
+    return !(expander_cache[sp.expander_idx] & (1u << sp.pin));  // Active-low
 }
 
 void initPins(const SensorPin* map, uint8_t count) {
@@ -69,7 +71,7 @@ void init() {
     memset(vertex_state, 0, sizeof(vertex_state));
     memset(edge_state, 0, sizeof(edge_state));
     memset(tile_state, 0, sizeof(tile_state));
-    memset(expander_cache, 0xFF, sizeof(expander_cache));
+    for (uint8_t e = 0; e < EXPANDER_COUNT; ++e) expander_cache[e] = 0xFFFF;
 
     // Configure direct GPIO pins as INPUT_PULLUP
     initPins(VERTEX_SENSOR_MAP, VERTEX_COUNT);

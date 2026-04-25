@@ -3,7 +3,7 @@
 //
 // Compiled only when CATAN_DEBUG_MONITOR is defined (see platformio.ini
 // env:debug_monitor).  All game logic is excluded — this firmware simply
-// reads all eight PCF8574 expanders every POLL_MS milliseconds and logs
+// reads all eight PCF8575 expanders every POLL_MS milliseconds and logs
 // any bit that changes state.
 //
 // Output format (Serial @ 115200):
@@ -26,17 +26,19 @@
 
 static constexpr uint32_t POLL_MS = 50;  // 20 Hz — fast enough to catch brief contacts
 
-// Last-known state for each expander byte (initialised to 0xFF = all high/idle).
-static uint8_t prev[EXPANDER_COUNT];
-static uint8_t curr[EXPANDER_COUNT];
+// Last-known state for each expander word (initialised to 0xFFFF = all high/idle).
+static uint16_t prev[EXPANDER_COUNT];
+static uint16_t curr[EXPANDER_COUNT];
 
-// Returns the raw byte from the expander, or 0xFF on error.
-static uint8_t readExpander(uint8_t idx) {
-    Wire.requestFrom(EXPANDER_ADDRS[idx], (uint8_t)1);
-    if (Wire.available()) {
-        return Wire.read();
+// Returns the raw 16-bit word from the expander (low byte first), or 0xFFFF on error.
+static uint16_t readExpander(uint8_t idx) {
+    Wire.requestFrom(EXPANDER_ADDRS[idx], (uint8_t)2);
+    if (Wire.available() >= 2) {
+        uint8_t lo = Wire.read();
+        uint8_t hi = Wire.read();
+        return (uint16_t)lo | ((uint16_t)hi << 8);
     }
-    return 0xFF;
+    return 0xFFFF;
 }
 
 void setup() {
@@ -44,7 +46,7 @@ void setup() {
     while (!Serial) { /* wait for USB CDC on Leonardo-class boards */ }
 
     Serial.println(F("=== Catan I2C Expander Monitor ==="));
-    Serial.println(F("Polling all 8 PCF8574 expanders. Bit LOW = sensor active."));
+    Serial.println(F("Polling all 8 PCF8575 expanders. Bit LOW = sensor active."));
     Serial.println(F("Format: [CHANGE] exp=0xAA bit=B  LOW (triggered)"));
     Serial.println(F("        [CHANGE] exp=0xAA bit=B HIGH (released)"));
     Serial.println();
@@ -52,19 +54,31 @@ void setup() {
     Wire.begin();
     Wire.setClock(100000UL);  // 100 kHz — matches the rest of the firmware
 
+    // Set all expander pins to input with pull-ups by writing 0xFFFF.
+    // Quasi-bidirectional I/O: writing 1 enables the weak pull-up and
+    // allows the pin to be driven low externally (input mode).
+    for (uint8_t i = 0; i < EXPANDER_COUNT; ++i) {
+        Wire.beginTransmission(EXPANDER_ADDRS[i]);
+        Wire.write(0xFF);  // low byte (P0–P7)
+        Wire.write(0xFF);  // high byte (P10–P17)
+        Wire.endTransmission();
+    }
+
     // Probe which expanders are present and log their initial state.
     Serial.println(F("[INIT] Scanning expanders..."));
     for (uint8_t i = 0; i < EXPANDER_COUNT; ++i) {
         prev[i] = readExpander(i);
-        // A missing expander will NAK and readExpander returns 0xFF.
+        // A missing expander will NAK and readExpander returns 0xFFFF.
         Serial.print(F("[INIT] exp=0x"));
         if (EXPANDER_ADDRS[i] < 0x10) Serial.print('0');
         Serial.print(EXPANDER_ADDRS[i], HEX);
-        if (prev[i] == 0xFF) {
-            Serial.println(F("  0xFF (no ack or all-high)"));
+        if (prev[i] == 0xFFFF) {
+            Serial.println(F("  0xFFFF (no ack or all-high)"));
         } else {
             Serial.print(F("  0x"));
-            if (prev[i] < 0x10) Serial.print('0');
+            if (prev[i] < 0x1000) Serial.print('0');
+            if (prev[i] < 0x100)  Serial.print('0');
+            if (prev[i] < 0x10)   Serial.print('0');
             Serial.println(prev[i], HEX);
         }
     }
@@ -79,12 +93,12 @@ void loop() {
 
     for (uint8_t i = 0; i < EXPANDER_COUNT; ++i) {
         curr[i] = readExpander(i);
-        uint8_t changed = curr[i] ^ prev[i];
+        uint16_t changed = curr[i] ^ prev[i];
         if (changed == 0) continue;
 
         // Report each changed bit individually.
         for (uint8_t bit = 0; bit < PINS_PER_EXPANDER; ++bit) {
-            if (!(changed & (1 << bit))) continue;
+            if (!(changed & (1u << bit))) continue;
             bool high = (curr[i] >> bit) & 1;
 
             Serial.print(F("[CHANGE] exp=0x"));

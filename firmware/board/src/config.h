@@ -19,8 +19,8 @@ static constexpr uint16_t TOTAL_LED_COUNT = 57;  // 19×2 + 9×1 + 10 spare
 static constexpr uint8_t MAX_LEDS_PER_TILE = 4;
 static constexpr uint8_t MAX_LEDS_PER_PORT = 2;
 
-// ── I2C GPIO Expanders (PCF8574) — sensor input ─────────────────────────────
-// The Mega is the I²C master for the eight PCF8574 expanders only. The
+// ── I2C GPIO Expanders (PCF8575) — sensor input ─────────────────────────────
+// The Mega is the I²C master for the eight PCF8575 expanders only. The
 // player BLE hub no longer shares this bus; it talks to the Mega over
 // UART (Serial1). Bus speed remains 100 kHz with 4.7 kΩ pull-ups on the
 // 3.3 V side of the level shifter.
@@ -28,7 +28,7 @@ static constexpr uint8_t EXPANDER_COUNT = 8;
 static constexpr uint8_t EXPANDER_ADDRS[EXPANDER_COUNT] = {
     0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
 };
-static constexpr uint8_t PINS_PER_EXPANDER = 8;
+static constexpr uint8_t PINS_PER_EXPANDER = 16;
 
 // ── Players ─────────────────────────────────────────────────────────────────
 // Logical seat count. The single ESP32-C6 BLE hub assigns each connecting

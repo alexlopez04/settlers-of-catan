@@ -7,7 +7,7 @@
 //
 // Two source types:
 //   DIRECT_GPIO  — sensor wired to an Arduino digital pin
-//   I2C_EXPANDER — sensor on a PCF8574/MCP23017; specify expander index + bit
+//   I2C_EXPANDER — sensor on a PCF8575; specify expander index + bit
 //
 // Edit pin_map.cpp to match your physical wiring.
 // =============================================================================

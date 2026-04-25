@@ -1,7 +1,7 @@
 // =============================================================================
 // main.cpp — Settlers of Catan: Arduino Mega central board controller.
 //
-//   Mega  <--I2C(100k)-->  PCF8574 sensor expanders   (game presence input)
+//   Mega  <--I2C(100k)-->  PCF8575 sensor expanders   (game presence input)
 //   Mega  <--Serial1-->    ESP32-C6 BLE hub           (player I/O)
 //
 // The Mega owns the game FSM, sensors, and LEDs. The hub owns BLE — it
