@@ -21,8 +21,18 @@ Usage:
 Hardware note:
   Mega Serial2: TX2=16 / RX2=17 at 115200 baud.
   Requires a 3.3 V ↔ 5 V level shifter between Pi GPIO UART and Mega Serial2.
-  Default Pi port: /dev/ttyAMA0 (GPIO14=TX, GPIO15=RX, enable_uart=1 in
-  /boot/config.txt and remove 'console=serial0' from /boot/cmdline.txt).
+
+  Pi GPIO UART setup (GPIO14=TX, GPIO15=RX):
+    Pi Zero / 1 / 2:  /dev/ttyAMA0 is the only UART — use directly.
+    Pi 3 / 4 / 5:     /dev/ttyAMA0 is claimed by Bluetooth by default.
+                       Add dtoverlay=disable-bt to /boot/firmware/config.txt
+                       (Pi 4/5) or /boot/config.txt (Pi 3) and reboot so that
+                       the PL011 UART is routed back to GPIO14/15.
+                       Alternatively pass --port /dev/ttyS0 to use the
+                       mini-UART (less reliable at high baud rates).
+  Also add enable_uart=1 to config.txt and remove console=serial0,115200
+  from /boot/firmware/cmdline.txt so the kernel does not use the UART as a
+  debug console.
 """
 from __future__ import annotations
 
