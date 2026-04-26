@@ -39,6 +39,12 @@ import {
   DrawnDevCardModal,
 } from '@/components/game/game-actions';
 
+// ── Module-level resume-dialog guard ────────────────────────────────────
+// Kept outside the component so it survives remounts that can occur during
+// BLE reconnection or navigation transitions.  Reset to false whenever the
+// session ends (connectionState → idle).
+let resumeAlertShown = false;
+
 // ── Main screen ───────────────────────────────────────────────────────────
 
 export default function GameScreen() {
@@ -61,13 +67,14 @@ export default function GameScreen() {
   const [turnStartCards, setTurnStartCards] = useState<number[] | null>(null);
   const rejectTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevDevCardsRef    = useRef<number[]>([]);
-  // Tracks whether the resume-game dialog has already been shown this session
-  // so we don't prompt again if the state is briefly re-broadcast.
-  const resumeShownRef     = useRef(false);
 
-  // Navigate away when disconnected.
+  // Navigate away when disconnected; also reset the module-level resume guard
+  // so a future session can show the dialog again.
   useEffect(() => {
-    if (connectionState === 'idle') router.replace('/');
+    if (connectionState === 'idle') {
+      resumeAlertShown = false;
+      router.replace('/');
+    }
   }, [connectionState]);
 
   // Derive phase early so it can be used in hooks below.
@@ -76,18 +83,18 @@ export default function GameScreen() {
   // ── Resume-game dialog ──────────────────────────────────────────────────
   // Only player 0 (slot 0) is prompted; others simply wait. Once the player
   // answers, the board clears hasSavedGame and stops broadcasting it.
-  // resumeShownRef is intentionally never reset mid-session: the component
-  // unmounts on disconnect, which resets it naturally for the next session.
+  // resumeAlertShown is module-level so it survives component remounts that
+  // can occur during navigation transitions or brief BLE reconnections.
   useEffect(() => {
     if (
       !gameState?.hasSavedGame ||
       phase !== GamePhase.LOBBY ||
       playerId !== 0 ||
-      resumeShownRef.current
+      resumeAlertShown
     ) {
       return;
     }
-    resumeShownRef.current = true;
+    resumeAlertShown = true;
     Alert.alert(
       'Resume Previous Game?',
       'A saved game was found from a previous session. Would you like to continue where you left off?',
