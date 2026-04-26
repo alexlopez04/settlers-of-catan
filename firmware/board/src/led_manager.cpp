@@ -122,10 +122,8 @@ void highlightTile(uint8_t tile_id, const CRGB& color, uint16_t duration_ms) {
 
 void dimTile(uint8_t tile_id) {
     if (tile_id >= TILE_COUNT) return;
-    CRGB dimmed = g_tile_base[tile_id];
-    dimmed.nscale8(64);
     const TileLedMap& m = TILE_LED_MAP[tile_id];
-    for (uint8_t i = 0; i < m.count; ++i) g_leds[m.indices[i]] = dimmed;
+    for (uint8_t i = 0; i < m.count; ++i) g_leds[m.indices[i]] = CRGB::Black;
 }
 
 void undimTile(uint8_t tile_id) {
