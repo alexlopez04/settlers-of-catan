@@ -22,6 +22,7 @@ import { BoardMap } from '@/components/ui/board-map';
 
 import { Spacing } from '@/constants/theme';
 import { RESOURCES } from '@/constants/game';
+import { PORTS, PortType } from '@/constants/board-topology';
 import {
   BoardState,
   DEV_CARD_COUNT,
@@ -34,6 +35,30 @@ import {
   playerResources,
   playerTotalCards,
 } from '@/services/proto';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Compute the best bank trade rate for each resource (mirrors firmware
+ * bankTradeRate). Returns a length-5 array indexed by Resource.
+ */
+function bankTradeRates(state: BoardState, player: number): number[] {
+  const rates = [4, 4, 4, 4, 4];
+  for (const port of PORTS) {
+    const owns = port.vertices.some(v => {
+      const vo = state.vertices[v];
+      return vo != null && vo.owner === player;
+    });
+    if (!owns) continue;
+    if (port.type === PortType.GENERIC_3_1) {
+      for (let r = 0; r < 5; r++) rates[r] = Math.min(rates[r], 3);
+    } else {
+      const res = (port.type as number) - 1; // LUMBER_2_1=1→0, WOOL_2_1=2→1, …
+      rates[res] = Math.min(rates[res], 2);
+    }
+  }
+  return rates;
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -222,8 +247,8 @@ const DEV_LABEL: Record<DevCard, string> = {
 };
 
 export function DevCardsPanel({
-  state, myId, myTurn, sendInput, theme,
-}: CommonProps) {
+  state, myId, myTurn, sendInput, theme, boughtThisTurn = [],
+}: CommonProps & { boughtThisTurn?: number[] }) {
   const [yopOpen, setYopOpen] = useState(false);
   const [monoOpen, setMonoOpen] = useState(false);
 
@@ -244,6 +269,7 @@ export function DevCardsPanel({
   const canPlay =
     myTurn &&
     state.phase === GamePhase.PLAYING &&
+    !state.hasRolled &&
     !state.cardPlayedThisTurn;
 
   const onPlay = (action: PlayerAction) => sendInput({ action });
@@ -262,26 +288,34 @@ export function DevCardsPanel({
           const n = counts[card];
           if (n === 0) return null;
           const isVp = card === DevCard.VP;
-          const enabled = canPlay && !isVp;
+          const isNewlyBought = (boughtThisTurn[card] ?? 0) > 0;
+          const enabled = canPlay && !isVp && !isNewlyBought;
           return (
             <View key={card} style={[s.devRow, { backgroundColor: theme.background }]}>
               <Text style={[s.devLabel, { color: theme.text }]}>
                 {DEV_LABEL[card]} ×{n}
               </Text>
               {!isVp && (
-                <Pressable
-                  disabled={!enabled}
-                  onPress={() => {
-                    if (card === DevCard.KNIGHT)         onPlay(PlayerAction.PLAY_KNIGHT);
-                    else if (card === DevCard.ROAD_BUILDING) onPlay(PlayerAction.PLAY_ROAD_BUILDING);
-                    else if (card === DevCard.YEAR_OF_PLENTY) setYopOpen(true);
-                    else if (card === DevCard.MONOPOLY)  setMonoOpen(true);
-                  }}
-                  style={btnStyle(enabled, theme)}>
-                  <Text style={[s.btnText, { color: enabled ? '#fff' : theme.textSecondary }]}>
-                    Play
-                  </Text>
-                </Pressable>
+                <View style={s.devPlayCol}>
+                  <Pressable
+                    disabled={!enabled}
+                    onPress={() => {
+                      if (card === DevCard.KNIGHT)              onPlay(PlayerAction.PLAY_KNIGHT);
+                      else if (card === DevCard.ROAD_BUILDING)  onPlay(PlayerAction.PLAY_ROAD_BUILDING);
+                      else if (card === DevCard.YEAR_OF_PLENTY) setYopOpen(true);
+                      else if (card === DevCard.MONOPOLY)       setMonoOpen(true);
+                    }}
+                    style={btnStyle(enabled, theme)}>
+                    <Text style={[s.btnText, { color: enabled ? '#fff' : theme.textSecondary }]}>
+                      Play
+                    </Text>
+                  </Pressable>
+                  {isNewlyBought && (
+                    <Text style={[s.devNewHint, { color: theme.textSecondary }]}>
+                      next turn
+                    </Text>
+                  )}
+                </View>
               )}
             </View>
           );
@@ -311,6 +345,56 @@ export function DevCardsPanel({
         theme={theme}
       />
     </View>
+  );
+}
+
+// ── Drawn dev card popup ────────────────────────────────────────────────────
+
+const DEV_EMOJI: Record<DevCard, string> = {
+  [DevCard.KNIGHT]:         '⚔️',
+  [DevCard.VP]:             '🏆',
+  [DevCard.ROAD_BUILDING]:  '🛤️',
+  [DevCard.YEAR_OF_PLENTY]: '🌾',
+  [DevCard.MONOPOLY]:       '💰',
+};
+
+const DEV_DESCRIPTION: Record<DevCard, string> = {
+  [DevCard.KNIGHT]:         'Move the robber to any tile and optionally steal a resource from an adjacent player.',
+  [DevCard.VP]:             'Worth 1 Victory Point — kept hidden until the game ends.',
+  [DevCard.ROAD_BUILDING]:  'Place 2 roads anywhere for free.',
+  [DevCard.YEAR_OF_PLENTY]: 'Take any 2 resources from the bank.',
+  [DevCard.MONOPOLY]:       'Name a resource — every opponent gives you all of theirs.',
+};
+
+export function DrawnDevCardModal({
+  card, onDismiss, theme,
+}: {
+  card: DevCard | null;
+  onDismiss: () => void;
+  theme: any;
+}) {
+  if (card === null) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+      <View style={s.modalBg}>
+        <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[s.modalTitle, { color: theme.text }]}>You drew a Dev Card!</Text>
+          <View style={[s.drawnCardBadge, { backgroundColor: theme.background }]}>
+            <Text style={s.drawnCardEmoji}>{DEV_EMOJI[card]}</Text>
+            <Text style={[s.drawnCardName, { color: theme.text }]}>{DEV_LABEL[card]}</Text>
+          </View>
+          <Text style={[s.modalBody, { color: theme.textSecondary }]}>
+            {DEV_DESCRIPTION[card]}
+          </Text>
+          <Text style={[s.drawnCardHint, { color: theme.textSecondary }]}>
+            You cannot play this card until your next turn.
+          </Text>
+          <Pressable onPress={onDismiss} style={btnStyle(true, theme)}>
+            <Text style={[s.btnText, { color: '#fff' }]}>Got it</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -643,30 +727,49 @@ function TradeComposer({
   if (!kind) return null;
 
   const my = playerResources(state, myId);
-  const giveTotal = give.reduce((a, b) => a + b, 0);
-  const wantTotal = want.reduce((a, b) => a + b, 0);
+  const rates = kind === 'bank' ? bankTradeRates(state, myId) : [1, 1, 1, 1, 1];
+
+  // Bank: each give[r] must be a multiple of rates[r]; credits = sum(give[r]/rates[r])
+  // and want_total must equal credits.
+  const credits    = give.reduce((acc, g, r) => acc + Math.floor(g / rates[r]), 0);
+  const wantTotal  = want.reduce((a, b) => a + b, 0);
+  const giveTotal  = give.reduce((a, b) => a + b, 0);
 
   const canSubmit =
     kind === 'bank'
-      ? giveTotal > 0 &&
-        wantTotal > 0 &&
-        // Default 4:1 — the board enforces actual ratios via ports.
-        giveTotal >= wantTotal * 2 &&
+      ? credits > 0 &&
+        wantTotal === credits &&
+        give.every((g, r) => g === 0 || g % rates[r] === 0) &&
         give.every((g, i) => my[i] >= g)
       : giveTotal > 0 &&
         wantTotal > 0 &&
         give.every((g, i) => my[i] >= g);
 
-  const adjust = (
-    set: React.Dispatch<React.SetStateAction<number[]>>,
-    i: number,
-    delta: number,
-    cap?: number,
-  ) => {
-    set(prev => {
+  const adjustGive = (i: number, dir: 1 | -1) => {
+    setGive(prev => {
       const next = prev.slice();
-      const v = Math.max(0, (prev[i] ?? 0) + delta);
-      next[i] = cap !== undefined ? Math.min(cap, v) : v;
+      const step = rates[i];
+      const max  = Math.floor(my[i] / step) * step;
+      next[i] = Math.max(0, Math.min(max, prev[i] + dir * step));
+      return next;
+    });
+  };
+
+  const adjustWant = (i: number, dir: 1 | -1) => {
+    setWant(prev => {
+      const next = prev.slice();
+      const n = prev[i] + dir;
+      if (n < 0) return prev;
+      if (dir > 0 && kind === 'bank' && wantTotal >= credits) return prev;
+      next[i] = n;
+      return next;
+    });
+  };
+
+  const adjustP2pGive = (i: number, dir: 1 | -1) => {
+    setGive(prev => {
+      const next = prev.slice();
+      next[i] = Math.max(0, Math.min(my[i], prev[i] + dir));
       return next;
     });
   };
@@ -697,48 +800,67 @@ function TradeComposer({
             {kind === 'bank' ? 'Trade with bank' : 'Trade with players'}
           </Text>
 
-          <Text style={[s.tradeMini, { color: theme.textSecondary }]}>You give</Text>
-          {RESOURCES.map((r, i) => (
-            <View key={`g-${r.key}`} style={s.discardRow}>
-              <Text style={s.discardEmoji}>{r.emoji}</Text>
-              <Text style={[s.discardHave, { color: theme.textSecondary }]}>have {my[i]}</Text>
-              <Pressable
-                disabled={give[i] === 0}
-                onPress={() => adjust(setGive, i, -1)}
-                style={[s.smallBtn, { backgroundColor: theme.background }]}>
-                <Text style={[s.btnText, { color: theme.text }]}>−</Text>
-              </Pressable>
-              <Text style={[s.discardCount, { color: theme.text }]}>{give[i]}</Text>
-              <Pressable
-                disabled={give[i] >= my[i]}
-                onPress={() => adjust(setGive, i, 1, my[i])}
-                style={[s.smallBtn, { backgroundColor: theme.background }]}>
-                <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
-              </Pressable>
-            </View>
-          ))}
+          {/* ── Give ── */}
+          <Text style={[s.tradeMini, { color: theme.textSecondary }]}>
+            {kind === 'bank' ? 'You give (tap +/− to step by rate)' : 'You give'}
+          </Text>
+          {RESOURCES.map((r, i) => {
+            const rate = rates[i];
+            const maxGive = kind === 'bank' ? Math.floor(my[i] / rate) * rate : my[i];
+            return (
+              <View key={`g-${r.key}`} style={s.discardRow}>
+                <Text style={s.discardEmoji}>{r.emoji}</Text>
+                <Text style={[s.discardHave, { color: theme.textSecondary }]}>
+                  {kind === 'bank' ? `${rate}:1` : `have ${my[i]}`}
+                </Text>
+                <Pressable
+                  disabled={give[i] === 0}
+                  onPress={() => kind === 'bank' ? adjustGive(i, -1) : adjustP2pGive(i, -1)}
+                  style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                  <Text style={[s.btnText, { color: theme.text }]}>−</Text>
+                </Pressable>
+                <Text style={[s.discardCount, { color: theme.text }]}>{give[i]}</Text>
+                <Pressable
+                  disabled={give[i] >= maxGive}
+                  onPress={() => kind === 'bank' ? adjustGive(i, 1) : adjustP2pGive(i, 1)}
+                  style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                  <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
+                </Pressable>
+              </View>
+            );
+          })}
 
+          {/* ── Credits earned (bank only) ── */}
+          {kind === 'bank' && (
+            <Text style={[s.tradeMini, { color: credits > 0 ? theme.primary : theme.textSecondary, marginTop: Spacing.one }]}>
+              Credits earned: {credits}
+            </Text>
+          )}
+
+          {/* ── Want ── */}
           <Text style={[s.tradeMini, { color: theme.textSecondary, marginTop: Spacing.two }]}>
-            You want
+            {kind === 'bank' ? `You receive (pick ${credits})` : 'You want'}
           </Text>
           {RESOURCES.map((r, i) => (
             <View key={`w-${r.key}`} style={s.discardRow}>
               <Text style={s.discardEmoji}>{r.emoji}</Text>
               <Pressable
                 disabled={want[i] === 0}
-                onPress={() => adjust(setWant, i, -1)}
+                onPress={() => adjustWant(i, -1)}
                 style={[s.smallBtn, { backgroundColor: theme.background }]}>
                 <Text style={[s.btnText, { color: theme.text }]}>−</Text>
               </Pressable>
               <Text style={[s.discardCount, { color: theme.text }]}>{want[i]}</Text>
               <Pressable
-                onPress={() => adjust(setWant, i, 1)}
+                disabled={kind === 'bank' && wantTotal >= credits}
+                onPress={() => adjustWant(i, 1)}
                 style={[s.smallBtn, { backgroundColor: theme.background }]}>
                 <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
               </Pressable>
             </View>
           ))}
 
+          {/* ── p2p target picker ── */}
           {kind === 'p2p' && (
             <View style={[s.tradeButtons, { marginTop: Spacing.two }]}>
               {[0, 1, 2, 3].filter(i => i !== myId && i < state.numPlayers).map(i => (
@@ -970,6 +1092,17 @@ const s = StyleSheet.create({
     paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderRadius: 10,
   },
   devLabel: { fontSize: 14, fontWeight: '600' },
+  devPlayCol: { alignItems: 'flex-end', gap: 2 },
+  devNewHint: { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+
+  // Drawn card modal
+  drawnCardBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.two,
+    borderRadius: 12, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two,
+  },
+  drawnCardEmoji: { fontSize: 32 },
+  drawnCardName:  { fontSize: 20, fontWeight: '800' },
+  drawnCardHint:  { fontSize: 12, fontStyle: 'italic' },
 
   // Buttons
   btn: {

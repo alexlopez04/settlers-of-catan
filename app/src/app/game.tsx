@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -16,7 +16,7 @@ import { useBle } from '@/context/ble-context';
 import { Spacing } from '@/constants/theme';
 import { PHASE_LABEL, buttonsForPhase } from '@/constants/game';
 import { useTheme } from '@/hooks/use-theme';
-import { GamePhase, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES } from '@/services/proto';
+import { GamePhase, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES, DevCard, DEV_CARD_COUNT } from '@/services/proto';
 import { SFSymbolIcon } from '@/components/ui/symbol';
 import { BoardOverview } from '@/components/ui/board-overview';
 import { PlacementToast } from '@/components/game/placement-toast';
@@ -35,6 +35,7 @@ import {
   DiscardOverlay,
   DistributionToast,
   Scoreboard,
+  DrawnDevCardModal,
 } from '@/components/game/game-actions';
 
 // ── Main screen ───────────────────────────────────────────────────────────
@@ -54,7 +55,11 @@ export default function GameScreen() {
   const [pendingAction, setPendingAction] = useState<PlayerAction | null>(null);
   const [showBoard, setShowBoard]         = useState(false);
   const [rejectMessage, setRejectMessage] = useState<string | null>(null);
-  const rejectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [drawnCard, setDrawnCard]           = useState<DevCard | null>(null);
+  // Snapshot of my dev-card counts at the start of my current turn; null when not my turn.
+  const [turnStartCards, setTurnStartCards] = useState<number[] | null>(null);
+  const rejectTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevDevCardsRef = useRef<number[]>([]);
 
   // Navigate away when disconnected.
   useEffect(() => {
@@ -87,6 +92,49 @@ export default function GameScreen() {
   useEffect(() => () => {
     if (rejectTimerRef.current) clearTimeout(rejectTimerRef.current);
   }, []);
+
+  // Capture a snapshot of my dev-card counts at the very start of each of my turns.
+  // Clear it when my turn ends. This lets us derive which cards were bought THIS turn.
+  useEffect(() => {
+    if (!gameState) return;
+    if (gameState.currentPlayer === myId) {
+      setTurnStartCards(prev => {
+        // Only take the snapshot once — when my turn first begins.
+        if (prev !== null) return prev;
+        return gameState.devCards.slice(
+          myId * DEV_CARD_COUNT,
+          myId * DEV_CARD_COUNT + DEV_CARD_COUNT,
+        );
+      });
+    } else {
+      setTurnStartCards(null);
+    }
+  }, [gameState?.currentPlayer, gameState?.devCards, myId]);
+
+  // Detect a newly drawn dev card and show the popup.
+  useEffect(() => {
+    if (!gameState) return;
+    const curr = gameState.devCards;
+    const prev = prevDevCardsRef.current;
+    if (prev.length > 0) {
+      for (let d = 0; d < DEV_CARD_COUNT; d++) {
+        const prevCount = prev[myId * DEV_CARD_COUNT + d] ?? 0;
+        const currCount = curr[myId * DEV_CARD_COUNT + d] ?? 0;
+        if (currCount > prevCount) setDrawnCard(d as DevCard);
+      }
+    }
+    prevDevCardsRef.current = curr.slice();
+  }, [gameState?.devCards, myId]);
+
+  // Derived: which of my cards were bought during this turn (play-locked).
+  const boughtThisTurn = useMemo(() => {
+    if (!gameState || !turnStartCards) return Array(DEV_CARD_COUNT).fill(0) as number[];
+    return Array.from({ length: DEV_CARD_COUNT }, (_, d) => {
+      const curr  = gameState.devCards[myId * DEV_CARD_COUNT + d] ?? 0;
+      const start = turnStartCards[d] ?? 0;
+      return Math.max(0, curr - start);
+    });
+  }, [gameState, myId, turnStartCards]);
 
   // ── Derived values ─────────────────────────────────────────────────────
 
@@ -217,7 +265,7 @@ export default function GameScreen() {
                 </>
               )}
               {isPlaying && (
-                <DevCardsPanel {...sharedProps} />
+                <DevCardsPanel {...sharedProps} boughtThisTurn={boughtThisTurn} />
               )}
               <Scoreboard {...sharedProps} />
             </>
@@ -245,6 +293,11 @@ export default function GameScreen() {
       {sharedProps && <StealOverlay    {...sharedProps} />}
       {sharedProps && <DiscardOverlay  {...sharedProps} />}
       {sharedProps && <IncomingTradeDialog {...sharedProps} />}
+      <DrawnDevCardModal
+        card={drawnCard}
+        onDismiss={() => setDrawnCard(null)}
+        theme={theme}
+      />
 
       {/* Board overview modal */}
       <BoardOverview

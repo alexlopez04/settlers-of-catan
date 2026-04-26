@@ -454,6 +454,10 @@ void StateMachine::onBankTrade_(uint8_t player, const uint8_t give[5], const uin
         emitReject_(player, RejectReason::WRONG_PHASE);
         return;
     }
+    if (player != game::currentPlayer()) {
+        emitReject_(player, RejectReason::OUT_OF_TURN);
+        return;
+    }
     RejectReason r = rules::validateBankTrade(player, give, want);
     if (r != RejectReason::NONE) { emitReject_(player, r); return; }
     for (uint8_t i = 0; i < 5; ++i) if (give[i]) game::spendRes(player, (Res)i, give[i]);
