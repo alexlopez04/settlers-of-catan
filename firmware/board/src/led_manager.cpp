@@ -49,6 +49,12 @@ struct FlashJob {
 constexpr uint8_t MAX_FLASH_JOBS = 4;
 FlashJob g_jobs[MAX_FLASH_JOBS] = {};
 
+// Periodic refresh: re-push the current LED state to the strip even when
+// nothing has changed, so any LEDs that drifted to a bad colour are corrected
+// before anyone notices.  Only fires while no animations are running.
+constexpr uint32_t REFRESH_INTERVAL_MS = 1000;
+static uint32_t g_last_refresh_ms = 0;
+
 void renderJob(const FlashJob& j) {
     for (uint8_t i = 0; i < j.num_tiles; ++i) {
         const TileLedMap& m = TILE_LED_MAP[j.tiles[i]];
@@ -164,9 +170,11 @@ void clear() {
 }
 
 void tick(uint32_t now_ms) {
+    bool any_active = false;
     bool dirty = false;
     for (auto& j : g_jobs) {
         if (!j.active) continue;
+        any_active = true;
         if ((int32_t)(now_ms - j.next_toggle_ms) < 0) continue;
         j.showing_color = !j.showing_color;
         if (j.blinks_remaining > 0) --j.blinks_remaining;
@@ -175,13 +183,24 @@ void tick(uint32_t now_ms) {
             j.showing_color = false;
             renderJob(j);
             j.active = false;
+            any_active = false;  // this job just finished
         } else {
             renderJob(j);
             j.next_toggle_ms = now_ms + j.interval_ms;
         }
         dirty = true;
     }
-    if (dirty) g_needs_show = true;
+    if (dirty) {
+        g_needs_show = true;
+        g_last_refresh_ms = now_ms;  // animations count as a refresh
+    }
+
+    // Periodic refresh: when idle, re-push current state to correct any
+    // LEDs that drifted to a bad colour between intentional updates.
+    if (!any_active && (now_ms - g_last_refresh_ms) >= REFRESH_INTERVAL_MS) {
+        g_needs_show = true;
+        g_last_refresh_ms = now_ms;
+    }
 }
 
 }  // namespace led
