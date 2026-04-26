@@ -633,8 +633,6 @@ export function TradePanel({
     <View style={s.section}>
       <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Trade</Text>
       <View style={[s.card, { backgroundColor: theme.backgroundElement }]}>
-        <ResourceBadgeRow values={my} theme={theme} />
-
         {/* ── Active outgoing offer ── */}
         {iMyOffer ? (
           <View style={[s.pendingOfferCard, { backgroundColor: theme.background, borderColor: theme.primary }]}>
@@ -658,21 +656,21 @@ export function TradePanel({
           </View>
         ) : (
           /* ── Trade buttons ── */
-          <View style={s.tradeButtons}>
+          <View style={s.tradePanelButtons}>
             <Pressable
               disabled={!canBankTrade}
               onPress={() => setOpen('bank')}
-              style={btnStyle(canBankTrade, theme)}>
+              style={[btnStyle(canBankTrade, theme), { flex: 1 }]}>
               <Text style={[s.btnText, { color: canBankTrade ? '#fff' : theme.textSecondary }]}>
-                Bank
+                Trade with Bank
               </Text>
             </Pressable>
             <Pressable
               disabled={!canOffer}
               onPress={() => setOpen('p2p')}
-              style={btnStyle(canOffer, theme)}>
+              style={[btnStyle(canOffer, theme), { flex: 1 }]}>
               <Text style={[s.btnText, { color: canOffer ? '#fff' : theme.textSecondary }]}>
-                Players
+                Trade with Players
               </Text>
             </Pressable>
           </View>
@@ -901,17 +899,18 @@ function TradeComposer({
     return (
       <Modal visible transparent animationType="fade" onRequestClose={onClose}>
         <View style={s.modalBg}>
-          <ScrollView
-            style={{ width: '100%' }}
-            contentContainerStyle={s.modalScrollContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}>
-            <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
-              <Text style={[s.modalTitle, { color: theme.text }]}>Trade with bank</Text>
-              <ResourceBadgeRow values={my} theme={theme} />
+          <View style={[s.modalCard, { backgroundColor: theme.backgroundElement, maxHeight: '90%' }]}>
+            <ScrollView
+              bounces={false}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={s.modalInnerScroll}>
 
-              <Text style={[s.tradeMini, { color: theme.textSecondary }]}>
-                You give (rate shown per resource)
+              <Text style={[s.modalTitle, { color: theme.text }]}>Trade with Bank</Text>
+
+              {/* You give */}
+              <Text style={[s.tradeDialogLabel, { color: theme.textSecondary, marginTop: Spacing.one }]}>
+                You give
               </Text>
               {RESOURCES.map((r, i) => {
                 const rate = rates[i];
@@ -919,7 +918,10 @@ function TradeComposer({
                 return (
                   <View key={`g-${r.key}`} style={s.discardRow}>
                     <Text style={s.discardEmoji}>{r.emoji}</Text>
-                    <Text style={[s.discardHave, { color: theme.textSecondary }]}>{rate}:1</Text>
+                    <Text style={[s.discardLabel, { color: theme.text }]}>{r.label}</Text>
+                    <Text style={[s.discardHave, { color: theme.textSecondary }]}>
+                      have {my[i]} · {rate}:1
+                    </Text>
                     <Pressable disabled={give[i] === 0} onPress={() => adjustGive(i, -1)}
                       style={[s.smallBtn, { backgroundColor: theme.background }]}>
                       <Text style={[s.btnText, { color: theme.text }]}>−</Text>
@@ -933,16 +935,22 @@ function TradeComposer({
                 );
               })}
 
-              <Text style={[s.tradeMini, { color: credits > 0 ? theme.primary : theme.textSecondary, marginTop: Spacing.one }]}>
-                Credits earned: {credits}
-              </Text>
+              {/* Credits indicator */}
+              <View style={[s.creditsRow, { backgroundColor: theme.background }]}>
+                <Text style={[s.tradeMini, { color: theme.textSecondary }]}>Credits to spend</Text>
+                <Text style={[s.creditsCount, { color: credits > 0 ? theme.primary : theme.textSecondary }]}>
+                  {credits - wantTotal} / {credits}
+                </Text>
+              </View>
 
-              <Text style={[s.tradeMini, { color: theme.textSecondary, marginTop: Spacing.two }]}>
-                You receive (pick {credits})
+              {/* You receive */}
+              <Text style={[s.tradeDialogLabel, { color: theme.textSecondary }]}>
+                You receive
               </Text>
               {RESOURCES.map((r, i) => (
                 <View key={`w-${r.key}`} style={s.discardRow}>
                   <Text style={s.discardEmoji}>{r.emoji}</Text>
+                  <Text style={[s.discardLabel, { color: theme.text }]}>{r.label}</Text>
                   <Pressable disabled={want[i] === 0} onPress={() => adjustWant(i, -1)}
                     style={[s.smallBtn, { backgroundColor: theme.background }]}>
                     <Text style={[s.btnText, { color: theme.text }]}>−</Text>
@@ -956,15 +964,15 @@ function TradeComposer({
               ))}
 
               <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
-                <Pressable onPress={onClose} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                <Pressable onPress={onClose} style={[s.btn, { flex: 1, backgroundColor: theme.backgroundSelected }]}>
                   <Text style={[s.btnText, { color: theme.text }]}>Cancel</Text>
                 </Pressable>
-                <Pressable disabled={!canSubmitBank} onPress={submitBank} style={btnStyle(canSubmitBank, theme)}>
+                <Pressable disabled={!canSubmitBank} onPress={submitBank} style={[btnStyle(canSubmitBank, theme), { flex: 1 }]}>
                   <Text style={[s.btnText, { color: canSubmitBank ? '#fff' : theme.textSecondary }]}>Trade</Text>
                 </Pressable>
               </View>
-            </View>
-          </ScrollView>
+            </ScrollView>
+          </View>
         </View>
       </Modal>
     );
@@ -976,12 +984,12 @@ function TradeComposer({
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={s.modalBg}>
-        <ScrollView
-          style={{ width: '100%' }}
-          contentContainerStyle={s.modalScrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}>
-          <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
+        <View style={[s.modalCard, { backgroundColor: theme.backgroundElement, maxHeight: '90%' }]}>
+          <ScrollView
+            bounces={false}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={s.modalInnerScroll}>
 
             {/* ── Step indicator ── */}
             <View style={s.stepIndicator}>
@@ -1041,13 +1049,13 @@ function TradeComposer({
                   </View>
                 ))}
                 <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
-                  <Pressable onPress={onClose} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                  <Pressable onPress={onClose} style={[s.btn, { flex: 1, backgroundColor: theme.backgroundSelected }]}>
                     <Text style={[s.btnText, { color: theme.text }]}>Cancel</Text>
                   </Pressable>
                   <Pressable
                     disabled={giveTotal === 0}
                     onPress={() => setP2PStep('want')}
-                    style={btnStyle(giveTotal > 0, theme)}>
+                    style={[btnStyle(giveTotal > 0, theme), { flex: 1 }]}>
                     <Text style={[s.btnText, { color: giveTotal > 0 ? '#fff' : theme.textSecondary }]}>
                       Next →
                     </Text>
@@ -1084,13 +1092,13 @@ function TradeComposer({
                   </View>
                 ))}
                 <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
-                  <Pressable onPress={() => setP2PStep('give')} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                  <Pressable onPress={() => setP2PStep('give')} style={[s.btn, { flex: 1, backgroundColor: theme.backgroundSelected }]}>
                     <Text style={[s.btnText, { color: theme.text }]}>← Back</Text>
                   </Pressable>
                   <Pressable
                     disabled={wantTotal === 0}
                     onPress={() => setP2PStep('target')}
-                    style={btnStyle(wantTotal > 0, theme)}>
+                    style={[btnStyle(wantTotal > 0, theme), { flex: 1 }]}>
                     <Text style={[s.btnText, { color: wantTotal > 0 ? '#fff' : theme.textSecondary }]}>
                       Next →
                     </Text>
@@ -1140,13 +1148,13 @@ function TradeComposer({
                   </Text>
                 )}
                 <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
-                  <Pressable onPress={() => setP2PStep('want')} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                  <Pressable onPress={() => setP2PStep('want')} style={[s.btn, { flex: 1, backgroundColor: theme.backgroundSelected }]}>
                     <Text style={[s.btnText, { color: theme.text }]}>← Back</Text>
                   </Pressable>
                   <Pressable
                     disabled={target === null}
                     onPress={submitP2P}
-                    style={btnStyle(target !== null, theme)}>
+                    style={[btnStyle(target !== null, theme), { flex: 1 }]}>
                     <Text style={[s.btnText, { color: target !== null ? '#fff' : theme.textSecondary }]}>
                       Send Offer
                     </Text>
@@ -1154,8 +1162,8 @@ function TradeComposer({
                 </View>
               </>
             )}
-          </View>
-        </ScrollView>
+          </ScrollView>
+        </View>
       </View>
     </Modal>
   );
@@ -1362,14 +1370,14 @@ const s = StyleSheet.create({
 
   // Buttons
   btn: {
-    paddingHorizontal: Spacing.three, paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.three, paddingVertical: 12,
     borderRadius: 10, alignItems: 'center', justifyContent: 'center', minWidth: 80,
   },
   smallBtn: {
-    paddingHorizontal: Spacing.two, paddingVertical: 6, borderRadius: 8,
-    minWidth: 36, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: Spacing.two, paddingVertical: 8, borderRadius: 8,
+    minWidth: 40, alignItems: 'center', justifyContent: 'center',
   },
-  btnText: { fontSize: 14, fontWeight: '700' },
+  btnText: { fontSize: 15, fontWeight: '700', textAlign: 'center' },
 
   // Modal
   modalBg: {
@@ -1413,6 +1421,7 @@ const s = StyleSheet.create({
   discardCount: { fontSize: 14, fontWeight: '800', minWidth: 24, textAlign: 'center' },
 
   // Trade
+  tradePanelButtons: { flexDirection: 'row', gap: Spacing.two },
   tradeButtons:    { flexDirection: 'row', gap: Spacing.two, flexWrap: 'wrap' },
   tradeMini:       { fontSize: 12, fontWeight: '600' },
   tradeOfferRow:   { gap: Spacing.one, marginVertical: Spacing.one },
@@ -1430,6 +1439,14 @@ const s = StyleSheet.create({
   pendingOfferTitle:  { fontSize: 14, fontWeight: '800' },
   pendingOfferSub:    { fontSize: 12, fontWeight: '500' },
   tradeBlockHint: { fontSize: 11, fontStyle: 'italic', textAlign: 'center' },
+
+  // Credits indicator (bank trade)
+  creditsRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderRadius: 10, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two,
+    marginVertical: Spacing.one,
+  },
+  creditsCount: { fontSize: 16, fontWeight: '800' },
 
   // Trade summary (compact give → want row)
   tradeSummaryRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, flexWrap: 'wrap' },
@@ -1463,11 +1480,8 @@ const s = StyleSheet.create({
   stepDotText:  { fontSize: 12, fontWeight: '800' },
   stepDivider:  { height: 2, flex: 1, marginHorizontal: 4 },
 
-  // Scrollable modal content wrapper
-  modalScrollContent: {
-    flexGrow: 1, justifyContent: 'center', alignItems: 'center',
-    padding: Spacing.four,
-  },
+  // Inner scroll content (inside modal card)
+  modalInnerScroll: { gap: Spacing.two },
 
   // Resource picker
   resPickerRow: {
