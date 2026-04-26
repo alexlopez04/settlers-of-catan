@@ -118,6 +118,8 @@ enum class RejectReason : uint8_t {
     DEV_DECK_EMPTY,                // 17
     INVALID_DISCARD,               // 18
     NOT_ELIGIBLE_TARGET,           // 19 — STEAL target not in eligible mask
+    PLACEMENT_INCOMPLETE,          // 20 — PLACE_DONE sent before required pieces placed
+    SETUP_TURN_LIMIT,              // 21 — tried to place a second settlement or road this setup turn
 };
 
 struct Effect {

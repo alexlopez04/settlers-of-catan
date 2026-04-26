@@ -230,13 +230,18 @@ static void test_distance_rule() {
     CHECK(containsEffect(es, EffectKind::PLACED_SETTLEMENT));
     CHECK_EQ((int)game::vertexState(v).owner, (int)cp);
 
-    // Attempt to place an adjacent settlement → must be rejected.
+    // Attempt to place a second settlement via the FSM — rejected for
+    // SETUP_TURN_LIMIT (turn limit is checked first by the state machine).
     sm.onVertexPresent(v_adj);
     es = drainEffects(sm);
     const core::Effect* rej = findEffect(es, EffectKind::PLACEMENT_REJECTED);
     CHECK(rej != nullptr);
-    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::TOO_CLOSE_TO_SETTLEMENT);
+    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::SETUP_TURN_LIMIT);
     CHECK_EQ((int)game::vertexState(v_adj).owner, (int)NO_PLAYER);
+
+    // The distance rule is still enforced by the rule engine directly.
+    RejectReason dist_r = core::rules::validateSettlement(v_adj, cp, /*initial=*/true);
+    CHECK_EQ((int)dist_r, (int)RejectReason::TOO_CLOSE_TO_SETTLEMENT);
 }
 
 static void test_initial_road_must_touch_settlement() {
@@ -738,6 +743,66 @@ static void test_p2p_trade() {
     CHECK(!game::hasPendingTrade());
 }
 
+// Verify that a second settlement in the same initial-placement turn is rejected.
+static void test_initial_placement_one_settlement_per_turn() {
+    g_current_test = "initial_placement_one_settlement_per_turn";
+    StateMachine sm;
+    bootToPlaying(sm, 2);
+    CHECK_EQ((int)game::phase(), (int)GamePhase::INITIAL_PLACEMENT);
+
+    uint8_t cp = game::currentPlayer();
+
+    // Place the one allowed settlement.
+    sm.onVertexPresent(0);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::PLACED_SETTLEMENT));
+
+    // A second settlement on a different, valid (distant) vertex must be rejected.
+    // Vertex 10 is far from vertex 0 on a standard Catan board.
+    sm.onVertexPresent(10);
+    es = drainEffects(sm);
+    const core::Effect* rej = findEffect(es, EffectKind::PLACEMENT_REJECTED);
+    CHECK(rej != nullptr);
+    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::SETUP_TURN_LIMIT);
+    CHECK_EQ((int)game::vertexState(10).owner, (int)NO_PLAYER);
+
+    // Settlement count must remain at 1.
+    CHECK_EQ((int)game::settlementCount(cp), 1);
+}
+
+// Verify that a second road in the same initial-placement turn is rejected.
+static void test_initial_placement_one_road_per_turn() {
+    g_current_test = "initial_placement_one_road_per_turn";
+    StateMachine sm;
+    bootToPlaying(sm, 2);
+
+    uint8_t cp = game::currentPlayer();
+
+    // Place the allowed settlement + road.
+    const uint8_t v = 0;
+    sm.onVertexPresent(v);
+    drainEffects(sm);
+    uint8_t e = anyEdgeAtVertex(v);
+    CHECK(e != 0xFF);
+    sm.onEdgePresent(e);
+    auto es = drainEffects(sm);
+    CHECK(containsEffect(es, EffectKind::PLACED_ROAD));
+
+    // Attempt to place a second road on a different free edge.
+    // Find an edge not yet owned.
+    uint8_t e2 = 0xFF;
+    for (uint8_t i = 0; i < EDGE_COUNT; ++i) {
+        if (game::edgeState(i).owner == NO_PLAYER) { e2 = i; break; }
+    }
+    CHECK(e2 != 0xFF);
+    sm.onEdgePresent(e2);
+    es = drainEffects(sm);
+    const core::Effect* rej = findEffect(es, EffectKind::PLACEMENT_REJECTED);
+    CHECK(rej != nullptr);
+    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::SETUP_TURN_LIMIT);
+    CHECK_EQ((int)game::roadCount(cp), 1);
+}
+
 static void test_longest_road() {
     g_current_test = "longest_road";
     game::init();
@@ -769,6 +834,54 @@ static void test_longest_road() {
     game::recomputeLongestRoad();
     CHECK_EQ((int)game::longestRoadPlayer(), 0);
     CHECK(game::longestRoadLength() >= 5);
+}
+
+// Verify that PLACE_DONE during INITIAL_PLACEMENT is rejected if the player
+// has not placed a settlement AND a road, and accepted once both are placed.
+static void test_initial_placement_done_requires_settlement_and_road() {
+    g_current_test = "initial_placement_done_requires_settlement_and_road";
+    StateMachine sm;
+    bootToPlaying(sm, 2);
+    CHECK_EQ((int)game::phase(), (int)GamePhase::INITIAL_PLACEMENT);
+
+    uint8_t cp = game::currentPlayer();
+
+    // ── Attempt 1: no pieces placed ──
+    sm.handlePlayerAction(cp, ActionKind::PLACE_DONE);
+    sm.tick(1);
+    auto es = drainEffects(sm);
+    const core::Effect* rej = findEffect(es, EffectKind::PLACEMENT_REJECTED);
+    CHECK(rej != nullptr);
+    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::PLACEMENT_INCOMPLETE);
+    CHECK_EQ((int)game::currentPlayer(), (int)cp);   // turn must NOT have advanced
+    CHECK_EQ((int)game::phase(), (int)GamePhase::INITIAL_PLACEMENT);
+
+    // ── Attempt 2: settlement placed, but no road ──
+    const uint8_t v = 0;
+    sm.onVertexPresent(v);
+    drainEffects(sm);
+    sm.handlePlayerAction(cp, ActionKind::PLACE_DONE);
+    sm.tick(2);
+    es = drainEffects(sm);
+    rej = findEffect(es, EffectKind::PLACEMENT_REJECTED);
+    CHECK(rej != nullptr);
+    if (rej) CHECK_EQ((int)rej->b, (int)RejectReason::PLACEMENT_INCOMPLETE);
+    CHECK_EQ((int)game::currentPlayer(), (int)cp);   // still the same player
+
+    // ── Attempt 3: settlement + road placed → accepted ──
+    uint8_t e = anyEdgeAtVertex(v);
+    CHECK(e != 0xFF);
+    sm.onEdgePresent(e);
+    drainEffects(sm);
+    sm.handlePlayerAction(cp, ActionKind::PLACE_DONE);
+    sm.tick(3);
+    es = drainEffects(sm);
+    // Must NOT emit PLACEMENT_REJECTED.
+    CHECK(!containsEffect(es, EffectKind::PLACEMENT_REJECTED));
+    // Turn must have advanced (TURN_ADVANCED effect or transition to PLAYING).
+    bool advanced = containsEffect(es, EffectKind::TURN_ADVANCED)
+                 || game::phase() == GamePhase::PLAYING;
+    CHECK(advanced);
 }
 
 // =============================================================================
@@ -805,6 +918,9 @@ int main() {
     test_bank_trade_invalid_rate();
     test_p2p_trade();
     test_longest_road();
+    test_initial_placement_one_settlement_per_turn();
+    test_initial_placement_one_road_per_turn();
+    test_initial_placement_done_requires_settlement_and_road();
 
     std::printf("--------------------\n");
     std::printf("Checks: %d  Failed: %d\n", g_checks, g_failed);

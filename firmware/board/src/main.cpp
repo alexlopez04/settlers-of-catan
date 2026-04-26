@@ -174,6 +174,8 @@ static const char* rejectReasonName(core::RejectReason r) {
         case core::RejectReason::DEV_DECK_EMPTY:           return "DECK_EMPTY";
         case core::RejectReason::INVALID_DISCARD:          return "BAD_DISCARD";
         case core::RejectReason::NOT_ELIGIBLE_TARGET:      return "BAD_TARGET";
+        case core::RejectReason::PLACEMENT_INCOMPLETE:     return "PLACE_INCOMPLETE";
+        case core::RejectReason::SETUP_TURN_LIMIT:         return "SETUP_LIMIT";
         default:                                           return "NONE";
     }
 }

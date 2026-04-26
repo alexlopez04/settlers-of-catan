@@ -245,6 +245,12 @@ void StateMachine::onTilePresent(uint8_t t) {
 // Placement helpers
 // ──────────────────────────────────────────────────────────────────────────
 void StateMachine::tryPlaceSettlement_(uint8_t v, uint8_t player, bool initial) {
+    // During initial placement each player may place exactly one settlement
+    // per turn (1 in round 1, 2 total by end of round 2).
+    if (initial && game::settlementCount(player) >= game::setupRound()) {
+        emitReject_(player, RejectReason::SETUP_TURN_LIMIT);
+        return;
+    }
     RejectReason r = rules::validateSettlement(v, player, initial);
     if (r != RejectReason::NONE) { emitReject_(player, r); return; }
 
@@ -281,6 +287,11 @@ void StateMachine::tryUpgradeCity_(uint8_t v, uint8_t player) {
 }
 
 void StateMachine::tryPlaceRoad_(uint8_t e, uint8_t player, bool initial) {
+    // During initial placement each player may place exactly one road per turn.
+    if (initial && game::roadCount(player) >= game::setupRound()) {
+        emitReject_(player, RejectReason::SETUP_TURN_LIMIT);
+        return;
+    }
     RejectReason r = rules::validateRoad(e, player, initial);
     if (r != RejectReason::NONE) { emitReject_(player, r); return; }
 
@@ -698,6 +709,18 @@ void StateMachine::handleNumberReveal_() {
 
 void StateMachine::handleInitialPlacement_() {
     if (pending_current_ == ActionKind::PLACE_DONE) {
+        uint8_t cp     = game::currentPlayer();
+        uint8_t needed = game::setupRound();   // 1 in round 1, 2 in round 2
+
+        // Board is source of truth: count actual placed pieces.
+        // The player must have placed at least `needed` settlements AND roads
+        // before they are allowed to advance to the next setup turn.
+        if (game::settlementCount(cp) < needed || game::roadCount(cp) < needed) {
+            pending_current_ = ActionKind::NONE;
+            emitReject_(cp, RejectReason::PLACEMENT_INCOMPLETE);
+            return;
+        }
+
         pending_current_ = ActionKind::NONE;
         // If this was the second-round placement, distribute starting resources.
         if (game::setupRound() == 2 && last_initial_vertex_ != NO_PLAYER) {

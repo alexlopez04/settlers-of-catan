@@ -113,6 +113,8 @@ export enum RejectReason {
   DEV_DECK_EMPTY             = 17,
   INVALID_DISCARD            = 18,
   NOT_ELIGIBLE_TARGET        = 19,
+  PLACEMENT_INCOMPLETE       = 20,
+  SETUP_TURN_LIMIT           = 21,
 }
 
 export const REJECT_MESSAGES: Record<RejectReason, string> = {
@@ -136,6 +138,8 @@ export const REJECT_MESSAGES: Record<RejectReason, string> = {
   [RejectReason.DEV_DECK_EMPTY]:           'The development card deck is empty',
   [RejectReason.INVALID_DISCARD]:          'Invalid discard amount',
   [RejectReason.NOT_ELIGIBLE_TARGET]:      'That player is not adjacent to the robber',
+  [RejectReason.PLACEMENT_INCOMPLETE]:     'Place a settlement and a road before ending your turn',
+  [RejectReason.SETUP_TURN_LIMIT]:         'You can only place one settlement and one road per setup turn',
 };
 
 // ── Public types ────────────────────────────────────────────────────────────
