@@ -13,8 +13,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
+
+import { useSettings } from '@/context/settings-context';
+import { BoardMap } from '@/components/ui/board-map';
 
 import { Spacing } from '@/constants/theme';
 import { RESOURCES } from '@/constants/game';
@@ -321,34 +325,59 @@ export function RobberOverlay({
   if (isStealing) return null;
 
   return (
+    <RobberMapModal state={state} sendInput={sendInput} theme={theme} />
+  );
+}
+
+/** Inner component so hooks can run unconditionally. */
+function RobberMapModal({
+  state,
+  sendInput,
+  theme,
+}: Pick<CommonProps, 'state' | 'sendInput' | 'theme'>) {
+  const { boardRotation } = useSettings();
+  const { width }         = useWindowDimensions();
+  // Visible area in the modal: leave room for title + body text + safe area.
+  const mapSize = Math.min(width - Spacing.four * 2, 340);
+
+  return (
     <Modal visible transparent animationType="fade">
       <View style={s.modalBg}>
-        <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[s.modalTitle, { color: theme.text }]}>Move the robber</Text>
+        <View style={[s.robberCard, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[s.modalTitle, { color: theme.text }]}>Move the Robber</Text>
           <Text style={[s.modalBody, { color: theme.textSecondary }]}>
-            Tap a tile number to move the robber.
+            Tap a tile to place the robber there.
           </Text>
-          <ScrollView style={{ maxHeight: 320 }}>
-            <View style={s.tileGrid}>
-              {state.tiles.map((t, idx) => {
-                const enabled = idx !== state.robberTile;
-                return (
-                  <Pressable
-                    key={idx}
-                    disabled={!enabled}
-                    onPress={() => sendInput({ action: PlayerAction.PLACE_ROBBER, robberTile: idx })}
-                    style={[
-                      s.tileBtn,
-                      { backgroundColor: enabled ? theme.background : theme.backgroundSelected },
-                      !enabled && { opacity: 0.4 },
-                    ]}>
-                    <Text style={[s.tileBtnLabel, { color: theme.textSecondary }]}>T{idx}</Text>
-                    <Text style={[s.tileBtnNum, { color: theme.text }]}>{t.number || '–'}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+
+          {/* Zoomable / pannable hex map */}
+          <ScrollView
+            style={{ width: mapSize, height: mapSize }}
+            contentContainerStyle={{ width: mapSize, height: mapSize }}
+            minimumZoomScale={1}
+            maximumZoomScale={3}
+            bouncesZoom
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+            centerContent
+            scrollsToTop={false}>
+            <BoardMap
+              tiles={state.tiles}
+              vertices={state.vertices}
+              edges={state.edges}
+              robberTile={state.robberTile}
+              rotation={boardRotation}
+              size={mapSize}
+              disabledTile={state.robberTile}
+              onTilePress={(tileIdx) =>
+                sendInput({ action: PlayerAction.PLACE_ROBBER, robberTile: tileIdx })
+              }
+              showPorts={false}
+            />
           </ScrollView>
+
+          <Text style={[s.robberHint, { color: theme.textSecondary }]}>
+            Pinch to zoom · drag to pan
+          </Text>
         </View>
       </View>
     </Modal>
@@ -959,6 +988,12 @@ const s = StyleSheet.create({
     padding: Spacing.four, backgroundColor: '#000a',
   },
   modalCard: { borderRadius: 16, padding: Spacing.four, width: '100%', maxWidth: 480, gap: Spacing.two },
+  // Robber picker: wider card to accommodate the hex map
+  robberCard: {
+    borderRadius: 16, padding: Spacing.three, width: '100%', maxWidth: 480,
+    gap: Spacing.two, alignItems: 'center',
+  },
+  robberHint: { fontSize: 11, fontWeight: '500' },
   modalTitle: { fontSize: 18, fontWeight: '800' },
   modalBody:  { fontSize: 13, fontWeight: '500' },
 

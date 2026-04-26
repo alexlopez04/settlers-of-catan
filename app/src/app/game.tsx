@@ -22,6 +22,7 @@ import { BoardOverview } from '@/components/ui/board-overview';
 import { PlacementToast } from '@/components/game/placement-toast';
 import { PhaseHero, FadeSlideIn } from '@/components/game/phase-hero';
 import { ActionBar } from '@/components/game/action-bar';
+import { LobbyOrientationPicker } from '@/components/game/lobby-orientation';
 import {
   ResourcesPanel,
   StorePanel,
@@ -198,6 +199,11 @@ export default function GameScreen() {
               theme={theme}
             />
           </FadeSlideIn>
+
+          {/* Orientation calibration in the lobby */}
+          {phase === GamePhase.LOBBY && (
+            <LobbyOrientationPicker />
+          )}
 
           {sharedProps && showResources && (
             <>

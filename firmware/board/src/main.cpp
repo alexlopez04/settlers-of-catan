@@ -46,6 +46,33 @@ static const CRGB kPlayerColors[MAX_PLAYERS] = {
     CRGB::Red, CRGB::Blue, CRGB::Orange, CRGB::White
 };
 
+// ── Lobby orientation-pattern constants ─────────────────────────────────────
+// Three tiles form a rotationally-unique triangle: T14 (red), T18 (green),
+// T10 (blue).  The mobile app mirrors these three points so players can
+// calibrate their perspective before the game.
+struct OrientationPoint { uint8_t tile; CRGB color; };
+static const OrientationPoint kOrientationPoints[] = {
+    { 14, CRGB(220,   0,   0) },  // red
+    { 18, CRGB(  0, 200,   0) },  // green
+    { 10, CRGB(  0,   0, 220) },  // blue
+};
+
+// Render the lobby LED state: dim base + orientation triangle + player slots.
+static void showLobbyLeds() {
+    const uint8_t mask = comms::connectedMask();
+    led::setAllTiles(CRGB(20, 20, 40));  // dim blue-grey base
+
+    // Orientation triangle
+    for (const auto& p : kOrientationPoints)
+        led::setTileColor(p.tile, p.color);
+
+    // Connected-player indicators on tiles 0–3
+    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+        if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
+    }
+    led::show();
+}
+
 static const CRGB kDemoColors[] = {
     CRGB(0,   200,   0), CRGB(255, 255, 0), CRGB(255, 165, 0),
     CRGB(255, 0,     0), CRGB(128, 0, 128), CRGB(255, 255, 255),
@@ -163,7 +190,9 @@ static void applyEffect(const core::Effect& ef) {
         case EffectKind::PHASE_ENTERED: {
             GamePhase p = (GamePhase)ef.a;
             LOGI("FSM", "phase -> %s", game::phaseName(p));
-            if (p == GamePhase::PLAYING) {
+            if (p == GamePhase::LOBBY) {
+                showLobbyLeds();
+            } else if (p == GamePhase::PLAYING) {
                 led::colorAllTilesByBiome();
                 if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
                 led::show();
@@ -176,11 +205,23 @@ static void applyEffect(const core::Effect& ef) {
                  (unsigned)mask, (unsigned)game::numPlayers(),
                  (unsigned)game::readyMask());
             if (game::phase() == GamePhase::LOBBY) {
-                led::setAllTiles(CRGB(20, 20, 40));
-                for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-                    if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
+                static uint8_t s_prevMask = 0;
+                uint8_t added = mask & ~s_prevMask;
+                s_prevMask = mask;
+                // Set lobby base colors first so the flash restores correctly.
+                showLobbyLeds();
+                if (added) {
+                    // Find the lowest newly-connected player and flash all tiles.
+                    static uint8_t s_allTiles[TILE_COUNT];
+                    for (uint8_t i = 0; i < TILE_COUNT; ++i) s_allTiles[i] = i;
+                    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+                        if (added & (1u << i)) {
+                            led::flashTiles(s_allTiles, TILE_COUNT,
+                                            kPlayerColors[i], 3, 100);
+                            break;
+                        }
+                    }
                 }
-                led::show();
             }
             break;
         }
@@ -614,8 +655,10 @@ void setup() {
     game::init();
     sm.reset();
 
-    led::setAllTiles(CRGB(20, 20, 40));
+    // Power-on indicator: full white until the lobby pattern takes over.
+    led::setAllTiles(CRGB::White);
     led::show();
+    delay(500);
 
     game::setPhase(GamePhase::LOBBY);
     LOGI("BOOT", "ready, entering LOBBY (broadcast every %lums)",
