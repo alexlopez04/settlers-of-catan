@@ -1,14 +1,14 @@
 // =============================================================================
-// proto.ts — Catan v7 wire protocol over BLE.
+// proto.ts — Catan v8 wire protocol over BLE.
 //
-// The Mega owns the entire game engine. The mobile is a pure display + input
-// surface: it sends PlayerInput actions and renders BoardState. There is no
-// ACTION_REPORT in v7 — VP and resources are computed by the board.
+// The ESP32-C6 owns the entire game engine. The mobile is a pure display +
+// input surface: it sends PlayerInput actions and renders BoardState. There is
+// no ACTION_REPORT — VP and resources are computed by the board.
 //
-//   hub -> mobile  (notify on State characteristic):    BoardState bytes
-//   mobile -> hub  (write on Input characteristic):     PlayerInput bytes
-//   mobile -> hub  (write once on Identity char):       client_id (UTF-8)
-//   hub -> mobile  (read+notify on Slot characteristic): assigned player_id
+//   board -> mobile  (notify on State characteristic):    BoardState bytes
+//   mobile -> board  (write on Input characteristic):     PlayerInput bytes
+//   mobile -> board  (write once on Identity char):       client_id (UTF-8)
+//   board -> mobile  (read+notify on Slot characteristic): assigned player_id
 //
 // react-native-ble-plx delivers/accepts characteristic values as base64.
 // =============================================================================

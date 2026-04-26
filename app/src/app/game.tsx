@@ -205,8 +205,7 @@ export default function GameScreen() {
     [sendInput],
   );
 
-  const handleDisconnect = useCallback(() => {
-    const activePhases: GamePhase[] = [
+  const handleDisconnect = useCallback(() => {    const activePhases: GamePhase[] = [
       GamePhase.BOARD_SETUP,
       GamePhase.NUMBER_REVEAL,
       GamePhase.INITIAL_PLACEMENT,
@@ -228,13 +227,13 @@ export default function GameScreen() {
     }
   }, [disconnect, phase]);
 
-  const sharedProps = gameState ? {
+  const sharedProps = useMemo(() => gameState ? {
     state: gameState,
     myId,
     myTurn,
     sendInput: sendInputTyped,
     theme,
-  } : null;
+  } : null, [gameState, myId, myTurn, sendInputTyped, theme]);
 
   // ── Render ─────────────────────────────────────────────────────────────
 

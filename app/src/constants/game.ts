@@ -34,6 +34,13 @@ export const DIE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
 export const REVEAL_ORDER = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12];
 
+// ── Build costs (indexed by Resource: L,W,G,B,O) ─────────────────────────
+
+export const ROAD_COST       = [1, 0, 0, 1, 0] as const;
+export const SETTLEMENT_COST = [1, 1, 1, 1, 0] as const;
+export const CITY_COST       = [0, 0, 2, 0, 3] as const;
+export const DEV_CARD_COST   = [0, 1, 1, 0, 1] as const;
+
 // ── Button spec ───────────────────────────────────────────────────────────
 
 export interface ButtonSpec {

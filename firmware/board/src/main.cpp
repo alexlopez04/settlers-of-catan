@@ -305,9 +305,14 @@ static void applyEffect(const core::Effect& ef) {
             if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[p % MAX_PLAYERS], 3, 150);
             break;
         }
-        case EffectKind::PLACED_ROAD:
-            LOGI("PLACE", "P%u road e%u", (unsigned)(ef.a + 1), (unsigned)ef.b);
+        case EffectKind::PLACED_ROAD: {
+            uint8_t p = ef.a, e = ef.b;
+            LOGI("PLACE", "P%u road e%u", (unsigned)(p + 1), (unsigned)e);
+            uint8_t adj[2];
+            uint8_t cnt = tilesForEdge(e, adj, 2);
+            if (cnt > 0) led::flashTiles(adj, cnt, kPlayerColors[p % MAX_PLAYERS], 2, 150);
             break;
+        }
         case EffectKind::PLACEMENT_REJECTED:
             LOGW("REJECT", "P%u reason=%s", (unsigned)(ef.a + 1),
                  rejectReasonName((core::RejectReason)ef.b));

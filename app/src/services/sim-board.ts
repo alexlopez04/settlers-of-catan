@@ -25,7 +25,7 @@ import {
   RejectReason,
   Resource,
 } from '@/services/proto';
-import { REVEAL_ORDER } from '@/constants/game';
+import { REVEAL_ORDER, ROAD_COST, SETTLEMENT_COST, CITY_COST, DEV_CARD_COST } from '@/constants/game';
 
 // ── Fixed board layout (standard Catan distribution) ────────────────────────
 const SIM_TILE_DATA: ReadonlyArray<{ biome: Biome; number: number }> = [
@@ -109,11 +109,6 @@ export function createSimulatedState(): BoardState {
 
 // ── Reducer helpers ──────────────────────────────────────────────────────────
 
-const ROAD_COST       = [1, 0, 0, 1, 0];
-const SETTLEMENT_COST = [1, 1, 1, 1, 0];
-const CITY_COST       = [0, 0, 2, 0, 3];
-const DEV_CARD_COST   = [0, 1, 1, 0, 1];
-
 function totalCards(s: BoardState, p: number): number {
   return (
     (s.resLumber[p] ?? 0) +
@@ -134,7 +129,7 @@ function add(arr: number[], i: number, delta: number): number[] {
   return arrayWith(arr, i, (arr[i] ?? 0) + delta);
 }
 
-function spendFromPlayer(s: BoardState, p: number, cost: number[]): BoardState {
+function spendFromPlayer(s: BoardState, p: number, cost: readonly number[]): BoardState {
   if ((s.resLumber[p] ?? 0) < cost[Resource.LUMBER]) return s;
   if ((s.resWool[p]   ?? 0) < cost[Resource.WOOL])   return s;
   if ((s.resGrain[p]  ?? 0) < cost[Resource.GRAIN])  return s;

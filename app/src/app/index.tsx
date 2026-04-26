@@ -102,7 +102,7 @@ export default function ScanScreen() {
   // Auto-scan when Bluetooth powers on.
   useEffect(() => {
     if (bleState === State.PoweredOn) startScan();
-  }, [bleState]);
+  }, [bleState, startScan]);
 
   // Navigate to game when connected.
   useEffect(() => {

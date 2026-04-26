@@ -276,7 +276,6 @@ export function PhaseHero(p: HeroProps) {
     case GamePhase.LOBBY: {
       const mask      = gameState?.connectedMask ?? 0;
       const connected = [0, 1, 2, 3].map(i => Boolean(mask & (1 << i)));
-      const needMore  = connectedCount < 1;
       return (
         <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
           <Text style={[s.heroTitle, { color: theme.text }]}>Waiting for players</Text>
@@ -288,11 +287,6 @@ export function PhaseHero(p: HeroProps) {
           <Text style={[s.heroSub, { color: theme.textSecondary }]}>
             {connectedCount} of 4 connected — need at least 1 to start
           </Text>
-          {needMore && (
-            <Text style={[s.lobbyHint, { color: theme.textSecondary }]}>
-              Need at least 1 player to start (up to 4)
-            </Text>
-          )}
         </View>
       );
     }
@@ -436,7 +430,6 @@ const s = StyleSheet.create({
   },
   lobbySlotText: { fontSize: 15, fontWeight: '700' },
   lobbySlotSub:  { fontSize: 12 },
-  lobbyHint:     { fontSize: 13, textAlign: 'center', marginTop: 4 },
 
   snakeRow:      { flexDirection: 'row', gap: 6, marginTop: Spacing.two },
   snakeSlot:     { borderWidth: 2, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },

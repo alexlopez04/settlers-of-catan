@@ -1,9 +1,9 @@
 // =============================================================================
-// game-actions.tsx — v7 store / dev cards / trade / robber / discard panels.
+// game-actions.tsx — v8 store / dev cards / trade / robber / discard panels.
 //
-// The Mega is authoritative: every interaction here just sends a PlayerInput
-// over BLE (or to the simulator). The UI displays the current BoardState
-// values read-only; no local mirroring of VP or resources.
+// The ESP32-C6 is authoritative: every interaction here just sends a
+// PlayerInput over BLE (or to the simulator). The UI displays the current
+// BoardState values read-only; no local mirroring of VP or resources.
 // =============================================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -19,9 +19,10 @@ import {
 
 import { useSettings } from '@/context/settings-context';
 import { BoardMap } from '@/components/ui/board-map';
+import type { useTheme } from '@/hooks/use-theme';
 
 import { Spacing } from '@/constants/theme';
-import { RESOURCES } from '@/constants/game';
+import { DEV_CARD_COST, CITY_COST, ROAD_COST, RESOURCES, SETTLEMENT_COST } from '@/constants/game';
 import { PORTS, PortType } from '@/constants/board-topology';
 import {
   BoardState,
@@ -62,6 +63,7 @@ function bankTradeRates(state: BoardState, player: number): number[] {
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
+type Theme = ReturnType<typeof useTheme>;
 type SendInput = (input: { action: PlayerAction; [k: string]: unknown }) => Promise<void>;
 
 interface CommonProps {
@@ -69,7 +71,7 @@ interface CommonProps {
   myId: number;
   myTurn: boolean;
   sendInput: SendInput;
-  theme: any;
+  theme: Theme;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ function ResourceBadgeRow({
 }: {
   values: number[];
   highlight?: number[];
-  theme: any;
+  theme: Theme;
 }) {
   return (
     <View style={s.resourceRow}>
@@ -101,7 +103,7 @@ function ResourceBadgeRow({
   );
 }
 
-function btnStyle(enabled: boolean, theme: any) {
+function btnStyle(enabled: boolean, theme: Theme) {
   return [
     s.btn,
     { backgroundColor: enabled ? theme.primary : theme.backgroundElement },
@@ -154,17 +156,12 @@ export function DistributionToast({ state, myId, theme }: CommonProps) {
 
 // ── Store (Buy panel) ───────────────────────────────────────────────────────
 
-const ROAD_COST       = [1, 0, 0, 1, 0];
-const SETTLEMENT_COST = [1, 1, 1, 1, 0];
-const CITY_COST       = [0, 0, 2, 0, 3];
-const DEV_CARD_COST   = [0, 1, 1, 0, 1];
-
-function canAfford(my: number[], cost: number[]): boolean {
+function canAfford(my: number[], cost: readonly number[]): boolean {
   for (let i = 0; i < 5; i++) if ((my[i] ?? 0) < cost[i]) return false;
   return true;
 }
 
-function CostLine({ cost, theme }: { cost: number[]; theme: any }) {
+function CostLine({ cost, theme }: { cost: readonly number[]; theme: Theme }) {
   return (
     <View style={s.costLine}>
       {RESOURCES.map((r, i) => cost[i] > 0 && (
@@ -180,7 +177,7 @@ export function StorePanel({ state, myId, myTurn, sendInput, theme }: CommonProp
   const my = playerResources(state, myId);
   const phase = state.phase;
   const canBuy = myTurn && phase === GamePhase.PLAYING && state.hasRolled;
-  const items: { label: string; cost: number[]; action: PlayerAction; available: boolean }[] = [
+  const items: { label: string; cost: readonly number[]; action: PlayerAction; available: boolean }[] = [
     { label: 'Road',       cost: ROAD_COST,       action: PlayerAction.BUY_ROAD,       available: true },
     { label: 'Settlement', cost: SETTLEMENT_COST, action: PlayerAction.BUY_SETTLEMENT, available: true },
     { label: 'City',       cost: CITY_COST,       action: PlayerAction.BUY_CITY,       available: true },
@@ -226,7 +223,7 @@ export function PendingPurchasesBanner({ state, myId, theme }: CommonProps) {
   if (f > 0) parts.push(`${f} free road${f === 1 ? '' : 's'}`);
   if (r > 0) parts.push(`${r} road${r === 1 ? '' : 's'} ready`);
   if (t > 0) parts.push(`${t} settlement${t === 1 ? '' : 's'} ready`);
-  if (c > 0) parts.push(`${c} city${c === 1 ? 'y' : 'ies'} ready`);
+  if (c > 0) parts.push(`${c} ${c === 1 ? 'city' : 'cities'} ready`);
   return (
     <View style={[s.banner, { backgroundColor: theme.backgroundElement, borderColor: theme.primary }]}>
       <Text style={[s.bannerText, { color: theme.text }]}>
@@ -371,7 +368,7 @@ export function DrawnDevCardModal({
 }: {
   card: DevCard | null;
   onDismiss: () => void;
-  theme: any;
+  theme: Theme;
 }) {
   if (card === null) return null;
   return (
@@ -712,7 +709,7 @@ function TradeComposer({
   myId: number;
   sendInput: SendInput;
   onClose: () => void;
-  theme: any;
+  theme: Theme;
 }) {
   const [give, setGive] = useState<number[]>([0, 0, 0, 0, 0]);
   const [want, setWant] = useState<number[]>([0, 0, 0, 0, 0]);
@@ -916,7 +913,7 @@ function YearOfPlentyModal({
   visible: boolean;
   onClose: () => void;
   onPick: (a: Resource, b: Resource) => void;
-  theme: any;
+  theme: Theme;
 }) {
   const [picks, setPicks] = useState<Resource[]>([]);
   useEffect(() => { if (!visible) setPicks([]); }, [visible]);
@@ -962,7 +959,7 @@ function MonopolyModal({
   visible: boolean;
   onClose: () => void;
   onPick: (r: Resource) => void;
-  theme: any;
+  theme: Theme;
 }) {
   if (!visible) return null;
   return (
