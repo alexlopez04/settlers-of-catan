@@ -192,10 +192,10 @@ typedef struct _catan_PlayerInput {
     uint32_t proto_version;
     uint32_t player_id;
     catan_PlayerAction action;
-    /* Optional stable identifier of the originating mobile device. The hub
- already tags every input with the authoritative player_id derived from
- the BLE connection slot, so client_id is informational only (used by
- the Mega for diagnostics and by the hub for slot persistence). */
+    /* Optional stable identifier of the originating mobile device. The board
+ re-stamps every input with the authoritative player_id derived from
+ the BLE connection slot, so client_id is informational only (used for
+ diagnostics and seat persistence within a power session). */
     char client_id[40];
     /* Generic resource payload — used by:
    ACTION_DISCARD       — counts to discard
@@ -226,19 +226,6 @@ typedef struct _catan_PlayerInput {
     uint32_t card_res_2;
 } catan_PlayerInput;
 
-/* PlayerPresence — sent by the hub to the Mega whenever the set of
- connected mobile devices changes. The Mega uses this to drive the lobby
- LED feedback and to know how many seats are filled. */
-typedef struct _catan_PlayerPresence {
-    uint32_t proto_version;
-    uint32_t connected_mask; /* bit i set => slot i has a phone connected */
-    /* Stable client_id per slot (empty string if the slot is vacant). Lets
- the Mega log which devices are seated where without needing its own
- BLE stack. */
-    pb_size_t client_ids_count;
-    char client_ids[4][40];
-} catan_PlayerPresence;
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -266,14 +253,11 @@ extern "C" {
 #define catan_PlayerInput_action_ENUMTYPE catan_PlayerAction
 
 
-
 /* Initializer values for message structs */
 #define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}}
 #define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerPresence_init_default        {0, 0, 0, {"", "", "", ""}}
 #define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}}
 #define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerPresence_init_zero           {0, 0, 0, {"", "", "", ""}}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define catan_BoardState_proto_version_tag       1
@@ -338,9 +322,6 @@ extern "C" {
 #define catan_PlayerInput_monopoly_res_tag       23
 #define catan_PlayerInput_card_res_1_tag         24
 #define catan_PlayerInput_card_res_2_tag         25
-#define catan_PlayerPresence_proto_version_tag   1
-#define catan_PlayerPresence_connected_mask_tag  2
-#define catan_PlayerPresence_client_ids_tag      3
 
 /* Struct field encoding specification for nanopb */
 #define catan_BoardState_FIELDLIST(X, a) \
@@ -413,27 +394,17 @@ X(a, STATIC,   SINGULAR, UINT32,   card_res_2,       25)
 #define catan_PlayerInput_CALLBACK NULL
 #define catan_PlayerInput_DEFAULT NULL
 
-#define catan_PlayerPresence_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   proto_version,     1) \
-X(a, STATIC,   SINGULAR, UINT32,   connected_mask,    2) \
-X(a, STATIC,   REPEATED, STRING,   client_ids,        3)
-#define catan_PlayerPresence_CALLBACK NULL
-#define catan_PlayerPresence_DEFAULT NULL
-
 extern const pb_msgdesc_t catan_BoardState_msg;
 extern const pb_msgdesc_t catan_PlayerInput_msg;
-extern const pb_msgdesc_t catan_PlayerPresence_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define catan_BoardState_fields &catan_BoardState_msg
 #define catan_PlayerInput_fields &catan_PlayerInput_msg
-#define catan_PlayerPresence_fields &catan_PlayerPresence_msg
 
 /* Maximum encoded size of messages (where known) */
 #define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardState_size
 #define catan_BoardState_size                    520
 #define catan_PlayerInput_size                   155
-#define catan_PlayerPresence_size                176
 
 #ifdef __cplusplus
 } /* extern "C" */

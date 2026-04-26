@@ -3,43 +3,23 @@ syntax = "proto3";
 package catan;
 
 // =============================================================================
-// Settlers of Catan — wire protocol (v7)
+// Settlers of Catan — wire protocol (v8)
 //
-// Architecture:
+// Architecture (post-merge, single MCU):
 //
-//   [Arduino Mega board]  <--UART(Serial1)-->  [ESP32-C6 player hub]  <--BLE-->  [up to 4 mobiles]
+//   [ESP32-C6 board controller]  <--BLE-->  [up to 4 mobiles]
 //
-// One Mega owns the entire game FSM, including:
-//   - phase / turn / piece placement
-//   - resource production (auto distribution on dice roll)
-//   - resource bank
-//   - development card deck + per-player inventory + Knights/VP cards
-//   - trade brokering (bank trades + player trades)
-//   - robber discard / move / steal flow
-//   - longest-road / largest-army / VP computation (board is the source
-//     of truth for victory points)
-//
-// The mobile / handheld is a pure display + input surface — it sends
-// PlayerInput actions and renders BoardState. There is no longer an
-// ACTION_REPORT round-tripping VP or resources.
-//
-// UART frame (both directions):
-//
-//   [ 0xCA magic ][ type : uint8 ][ len : uint8 ][ nanopb payload : len bytes ][ crc8 : uint8 ]
-//
-// Type codes:
-//   0x01  BoardState     (Mega -> hub -> mobiles, broadcast)
-//   0x02  PlayerInput    (mobile -> hub -> Mega)
-//   0x03  PlayerPresence (hub -> Mega, whenever the connected slot mask changes)
-//
-// CRC-8 (poly 0x07, init 0x00) covers [type, len, payload]. Receivers MUST
-// drop frames that fail CRC or whose first byte is not 0xCA.
+// A single ESP32-C6 owns the entire game FSM, the Hall-effect sensor bus,
+// the WS2812 LEDs and the BLE peripheral. The mobile is a pure display +
+// input surface — it sends PlayerInput actions and renders BoardState.
+// There is no longer a separate hub MCU, no UART link, and no
+// PlayerPresence frame (BLE callbacks know slot occupancy directly).
 //
 // BLE wire format (per connection):
-//   mobile -> hub:  bare nanopb PlayerInput bytes (no header — ATT carries length)
-//   hub -> mobile:  bare nanopb BoardState bytes  (notify on state characteristic)
+//   mobile -> board:  bare nanopb PlayerInput bytes (no header — ATT carries length)
+//   board -> mobile:  bare nanopb BoardState bytes  (notify on state characteristic)
 //
-// Schema version: 7 — full automated game engine.
+// Schema version: 8 — full automated game engine, single-MCU architecture.
 // =============================================================================
 
 // ----- Enums ----------------------------------------------------------------
@@ -225,10 +205,10 @@ message PlayerInput {
   uint32       player_id     = 2;
   PlayerAction action        = 3;
 
-  // Optional stable identifier of the originating mobile device. The hub
-  // already tags every input with the authoritative player_id derived from
-  // the BLE connection slot, so client_id is informational only (used by
-  // the Mega for diagnostics and by the hub for slot persistence).
+  // Optional stable identifier of the originating mobile device. The board
+  // re-stamps every input with the authoritative player_id derived from
+  // the BLE connection slot, so client_id is informational only (used for
+  // diagnostics and seat persistence within a power session).
   string client_id = 4;
 
   // Generic resource payload — used by:
@@ -263,17 +243,4 @@ message PlayerInput {
   // ACTION_PLAY_YEAR_OF_PLENTY — two chosen resource indices (0..4).
   uint32 card_res_1 = 24;
   uint32 card_res_2 = 25;
-}
-
-// PlayerPresence — sent by the hub to the Mega whenever the set of
-// connected mobile devices changes. The Mega uses this to drive the lobby
-// LED feedback and to know how many seats are filled.
-message PlayerPresence {
-  uint32 proto_version  = 1;
-  uint32 connected_mask = 2;   // bit i set => slot i has a phone connected
-
-  // Stable client_id per slot (empty string if the slot is vacant). Lets
-  // the Mega log which devices are seated where without needing its own
-  // BLE stack.
-  repeated string client_ids = 3;
 }

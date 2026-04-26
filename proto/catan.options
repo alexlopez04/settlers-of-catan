@@ -24,6 +24,3 @@ catan.BoardState.bank_supply              max_size:5
 catan.BoardState.last_distribution        max_size:20
 
 catan.PlayerInput.client_id               max_size:40
-
-catan.PlayerPresence.client_ids           max_count:4
-catan.PlayerPresence.client_ids           max_size:40

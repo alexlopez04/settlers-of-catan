@@ -12,9 +12,6 @@ PB_BIND(catan_BoardState, catan_BoardState, 2)
 PB_BIND(catan_PlayerInput, catan_PlayerInput, AUTO)
 
 
-PB_BIND(catan_PlayerPresence, catan_PlayerPresence, AUTO)
-
-
 
 
 

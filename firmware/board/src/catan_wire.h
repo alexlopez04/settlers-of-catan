@@ -1,19 +1,12 @@
 #pragma once
 // =============================================================================
-// catan_wire.h — Shared UART/BLE framing helpers and nanopb codecs.
+// catan_wire.h — nanopb encode/decode helpers for the BLE wire format.
 //
-// An identical copy lives in firmware/board/src/. Keep them in sync.
+// The board MCU and the mobile app exchange bare nanopb payloads (no
+// framing) over BLE GATT — ATT carries length, so no magic / CRC layer is
+// needed. After the v8 merge there is no UART link to wrap.
 //
-// UART frame (Mega ⇆ hub, both directions):
-//
-//   [ 0xCA magic ][ type : uint8 ][ len : uint8 ][ payload : len bytes ][ crc8 : uint8 ]
-//
-// CRC-8 (poly 0x07, init 0x00) covers [type, len, payload]. Receivers
-// drop frames whose first byte is not CATAN_WIRE_MAGIC or whose CRC fails.
-//
-// BLE payloads are bare nanopb bytes (no header) — ATT carries length.
-//
-// Schema version: 7.
+// Schema version: 8.
 // =============================================================================
 
 #include <stdint.h>
@@ -30,79 +23,14 @@
 extern "C" {
 #endif
 
-#define CATAN_WIRE_MAGIC      0xCAu
-#define CATAN_PROTO_VERSION   7u
+#define CATAN_PROTO_VERSION   8u
 
-// Message type codes used in the UART frame header.
-#define CATAN_MSG_BOARD_STATE     0x01u
-#define CATAN_MSG_PLAYER_INPUT    0x02u
-#define CATAN_MSG_PLAYER_PRESENCE 0x03u
+// Buffer cap for the largest BLE payload. Worst-case BoardState is ~520
+// bytes (nanopb computed) but real PLAYING-phase encodes are well under
+// 350. 480 leaves headroom under the 509-byte ATT notify limit at MTU 512.
+#define CATAN_MAX_PAYLOAD     480u
 
-// Payload + framing sizes. Must be ≥ catan_BoardState_size (nanopb max ≈ 520).
-// In practice the PLAYING-phase worst-case encode is ~300 bytes; 340 is safe.
-// The BLE MTU (config.h BLE_MTU) must be ≥ CATAN_MAX_PAYLOAD + 3 (ATT header).
-#define CATAN_MAX_PAYLOAD     340u
-// Frame: [magic:1][type:1][len_lo:1][len_hi:1][payload:len][crc:1]
-// Two-byte little-endian length supports payloads up to 65535 bytes.
-#define CATAN_FRAME_OVERHEAD  5u
-#define CATAN_MAX_FRAME       (CATAN_MAX_PAYLOAD + CATAN_FRAME_OVERHEAD)
-
-// Maximum number of player slots — must match firmware/board/src/config.h.
 #define CATAN_MAX_PLAYERS     4u
-
-// ---------------------------------------------------------------------------
-// CRC-8 (poly 0x07, init 0x00). Tiny, table-free; called on short buffers.
-// ---------------------------------------------------------------------------
-static inline uint8_t catan_crc8(const uint8_t* data, size_t len) {
-    uint8_t crc = 0;
-    for (size_t i = 0; i < len; ++i) {
-        crc ^= data[i];
-        for (uint8_t b = 0; b < 8; ++b) {
-            crc = (crc & 0x80u) ? (uint8_t)((crc << 1) ^ 0x07u)
-                                : (uint8_t)(crc << 1);
-        }
-    }
-    return crc;
-}
-
-// ---------------------------------------------------------------------------
-// Frame build / parse
-// ---------------------------------------------------------------------------
-
-// Wrap a nanopb payload in the UART envelope. Returns total frame length
-// or 0 on failure (buffer too small / payload oversize).
-static inline size_t catan_wire_pack(uint8_t type,
-                                     const uint8_t* payload, size_t payload_len,
-                                     uint8_t* frame, size_t cap) {
-    if (payload_len > CATAN_MAX_PAYLOAD) return 0;
-    if (cap < payload_len + CATAN_FRAME_OVERHEAD) return 0;
-    frame[0] = CATAN_WIRE_MAGIC;
-    frame[1] = type;
-    frame[2] = (uint8_t)(payload_len & 0xFFu);         // len low byte
-    frame[3] = (uint8_t)((payload_len >> 8) & 0xFFu);  // len high byte
-    if (payload_len) memcpy(frame + 4, payload, payload_len);
-    // CRC covers: type + len_lo + len_hi + payload
-    frame[4 + payload_len] = catan_crc8(frame + 1, payload_len + 3);
-    return payload_len + CATAN_FRAME_OVERHEAD;
-}
-
-// Validate a candidate frame buffer. On success returns true and fills
-// out_type / out_payload / out_payload_len; otherwise returns false.
-static inline bool catan_wire_unpack(const uint8_t* frame, size_t frame_len,
-                                     uint8_t* out_type,
-                                     const uint8_t** out_payload,
-                                     uint16_t* out_payload_len) {
-    if (frame_len < CATAN_FRAME_OVERHEAD) return false;
-    if (frame[0] != CATAN_WIRE_MAGIC) return false;
-    uint16_t len = (uint16_t)frame[2] | ((uint16_t)frame[3] << 8);
-    if ((size_t)len + CATAN_FRAME_OVERHEAD != frame_len) return false;
-    uint8_t want_crc = catan_crc8(frame + 1, (size_t)len + 3);
-    if (frame[4 + len] != want_crc) return false;
-    *out_type = frame[1];
-    *out_payload = frame + 4;
-    *out_payload_len = len;
-    return true;
-}
 
 // ---------------------------------------------------------------------------
 // nanopb encode helpers — return payload length or 0 on failure.
@@ -119,13 +47,6 @@ static inline size_t catan_encode_player_input(const catan_PlayerInput* in,
                                                uint8_t* buf, size_t cap) {
     pb_ostream_t os = pb_ostream_from_buffer(buf, cap);
     if (!pb_encode(&os, catan_PlayerInput_fields, in)) return 0;
-    return os.bytes_written;
-}
-
-static inline size_t catan_encode_player_presence(const catan_PlayerPresence* p,
-                                                  uint8_t* buf, size_t cap) {
-    pb_ostream_t os = pb_ostream_from_buffer(buf, cap);
-    if (!pb_encode(&os, catan_PlayerPresence_fields, p)) return 0;
     return os.bytes_written;
 }
 
@@ -146,14 +67,6 @@ static inline bool catan_decode_player_input(const uint8_t* buf, size_t len,
     memset(out, 0, sizeof(*out));
     pb_istream_t is = pb_istream_from_buffer(buf, len);
     if (!pb_decode(&is, catan_PlayerInput_fields, out)) return false;
-    return out->proto_version == CATAN_PROTO_VERSION;
-}
-
-static inline bool catan_decode_player_presence(const uint8_t* buf, size_t len,
-                                                catan_PlayerPresence* out) {
-    memset(out, 0, sizeof(*out));
-    pb_istream_t is = pb_istream_from_buffer(buf, len);
-    if (!pb_decode(&is, catan_PlayerPresence_fields, out)) return false;
     return out->proto_version == CATAN_PROTO_VERSION;
 }
 

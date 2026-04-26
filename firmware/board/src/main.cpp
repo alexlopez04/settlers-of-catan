@@ -1,26 +1,27 @@
 // =============================================================================
-// main.cpp — Settlers of Catan: Arduino Mega central board controller.
+// main.cpp — Settlers of Catan: unified ESP32-C6 board controller.
 //
-//   Mega  <--I2C(100k)-->  PCF8575 sensor expanders   (game presence input)
-//   Mega  <--Serial1-->    ESP32-C6 BLE hub           (player I/O)
+//   ESP32-C6  <--I²C(400k)-->  PCF8575 expanders   (Hall sensor input)
+//   ESP32-C6  <-- BLE -->      up to 4 mobile phones (Identity / Slot / State / Input)
+//   ESP32-C6  --> RMT / GPIO10 --> WS2812B strip (FastLED)
 //
-// The Mega owns the game FSM, sensors, and LEDs. The hub owns BLE — it
-// reports who is connected (PlayerPresence) and forwards each phone's
-// PlayerInput. The Mega broadcasts BoardState to the hub on a fixed
-// 200 ms cadence; the hub fans those out to every connected mobile.
+// One MCU owns: game FSM, sensor scanning, LED rendering, BLE peripheral.
+// The mobile is a thin client — see proto/catan.proto v8.
 //
-// All game logic — phases, placement, dice, turn order — lives in
-// firmware/board/src/core/ and is host-compilable for native simulation
-// (see firmware/board/native/sim_main.cpp).
+// Threading: NimBLE owns its own host task (created by the library). All
+// game logic runs in the Arduino loop() task. BLE→game data crosses the
+// task boundary via a FreeRTOS queue inside comms.cpp; game→BLE notifies
+// run on the loop() task and are serialised by the NimBLE stack.
 // =============================================================================
 
 #include <Arduino.h>
-#include <Wire.h>
+#include <esp_system.h>
+#include <esp_random.h>
 
 #include "config.h"
 #include "catan_log.h"
 #include "catan_wire.h"
-#include "link.h"
+#include "comms.h"
 #include "board_types.h"
 #include "board_topology.h"
 #include "led_manager.h"
@@ -35,18 +36,16 @@
 static core::StateMachine sm;
 
 // ── Timing ──────────────────────────────────────────────────────────────────
-static constexpr uint32_t HEARTBEAT_MS = 5000;
-static uint32_t last_broadcast_ms  = 0;
-static uint32_t last_heartbeat_ms  = 0;
-static uint32_t last_demo_ms       = 0;
-static uint32_t loop_count         = 0;
+static uint32_t last_broadcast_ms = 0;
+static uint32_t last_heartbeat_ms = 0;
+static uint32_t last_demo_ms      = 0;
+static uint32_t loop_count        = 0;
 
-// ── Player colours for LED feedback ────────────────────────────────────────
+// ── Player colours ──────────────────────────────────────────────────────────
 static const CRGB kPlayerColors[MAX_PLAYERS] = {
     CRGB::Red, CRGB::Blue, CRGB::Orange, CRGB::White
 };
 
-// ── Demo Mode ───────────────────────────────────────────────────────────────
 static const CRGB kDemoColors[] = {
     CRGB(0,   200,   0), CRGB(255, 255, 0), CRGB(255, 165, 0),
     CRGB(255, 0,     0), CRGB(128, 0, 128), CRGB(255, 255, 255),
@@ -63,11 +62,11 @@ static void runDemoFrame() {
 
 static CRGB portColor(PortType pt) {
     switch (pt) {
-        case PortType::LUMBER_2_1:  return CRGB(0, 200, 0);    // matches FOREST biome
-        case PortType::WOOL_2_1:    return CRGB(255, 255, 0);  // matches PASTURE biome
-        case PortType::GRAIN_2_1:   return CRGB(255, 165, 0);  // matches FIELD biome
-        case PortType::BRICK_2_1:   return CRGB(255, 0, 0);    // matches HILL biome
-        case PortType::ORE_2_1:     return CRGB(128, 0, 128);  // matches MOUNTAIN biome
+        case PortType::LUMBER_2_1:  return CRGB(0, 200, 0);
+        case PortType::WOOL_2_1:    return CRGB(255, 255, 0);
+        case PortType::GRAIN_2_1:   return CRGB(255, 165, 0);
+        case PortType::BRICK_2_1:   return CRGB(255, 0, 0);
+        case PortType::ORE_2_1:     return CRGB(128, 0, 128);
         case PortType::GENERIC_3_1: return CRGB::White;
         default:                    return CRGB::Black;
     }
@@ -100,36 +99,33 @@ static catan_GamePhase phaseToProto(GamePhase p) {
 
 static core::ActionKind toActionKind(catan_PlayerAction a) {
     switch (a) {
-        case catan_PlayerAction_ACTION_READY:              return core::ActionKind::READY;
-        case catan_PlayerAction_ACTION_START_GAME:         return core::ActionKind::START_GAME;
-        case catan_PlayerAction_ACTION_NEXT_NUMBER:        return core::ActionKind::NEXT_NUMBER;
-        case catan_PlayerAction_ACTION_PLACE_DONE:         return core::ActionKind::PLACE_DONE;
-        case catan_PlayerAction_ACTION_ROLL_DICE:          return core::ActionKind::ROLL_DICE;
-        case catan_PlayerAction_ACTION_END_TURN:           return core::ActionKind::END_TURN;
-        case catan_PlayerAction_ACTION_SKIP_ROBBER:        return core::ActionKind::SKIP_ROBBER;
-        case catan_PlayerAction_ACTION_BUY_ROAD:           return core::ActionKind::BUY_ROAD;
-        case catan_PlayerAction_ACTION_BUY_SETTLEMENT:     return core::ActionKind::BUY_SETTLEMENT;
-        case catan_PlayerAction_ACTION_BUY_CITY:           return core::ActionKind::BUY_CITY;
-        case catan_PlayerAction_ACTION_BUY_DEV_CARD:       return core::ActionKind::BUY_DEV_CARD;
-        case catan_PlayerAction_ACTION_PLACE_ROBBER:       return core::ActionKind::PLACE_ROBBER;
-        case catan_PlayerAction_ACTION_STEAL_FROM:         return core::ActionKind::STEAL_FROM;
-        case catan_PlayerAction_ACTION_DISCARD:            return core::ActionKind::DISCARD;
-        case catan_PlayerAction_ACTION_BANK_TRADE:         return core::ActionKind::BANK_TRADE;
-        case catan_PlayerAction_ACTION_TRADE_OFFER:        return core::ActionKind::TRADE_OFFER;
-        case catan_PlayerAction_ACTION_TRADE_ACCEPT:       return core::ActionKind::TRADE_ACCEPT;
-        case catan_PlayerAction_ACTION_TRADE_DECLINE:      return core::ActionKind::TRADE_DECLINE;
-        case catan_PlayerAction_ACTION_TRADE_CANCEL:       return core::ActionKind::TRADE_CANCEL;
-        case catan_PlayerAction_ACTION_PLAY_KNIGHT:        return core::ActionKind::PLAY_KNIGHT;
-        case catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING: return core::ActionKind::PLAY_ROAD_BUILDING;
+        case catan_PlayerAction_ACTION_READY:               return core::ActionKind::READY;
+        case catan_PlayerAction_ACTION_START_GAME:          return core::ActionKind::START_GAME;
+        case catan_PlayerAction_ACTION_NEXT_NUMBER:         return core::ActionKind::NEXT_NUMBER;
+        case catan_PlayerAction_ACTION_PLACE_DONE:          return core::ActionKind::PLACE_DONE;
+        case catan_PlayerAction_ACTION_ROLL_DICE:           return core::ActionKind::ROLL_DICE;
+        case catan_PlayerAction_ACTION_END_TURN:            return core::ActionKind::END_TURN;
+        case catan_PlayerAction_ACTION_SKIP_ROBBER:         return core::ActionKind::SKIP_ROBBER;
+        case catan_PlayerAction_ACTION_BUY_ROAD:            return core::ActionKind::BUY_ROAD;
+        case catan_PlayerAction_ACTION_BUY_SETTLEMENT:      return core::ActionKind::BUY_SETTLEMENT;
+        case catan_PlayerAction_ACTION_BUY_CITY:            return core::ActionKind::BUY_CITY;
+        case catan_PlayerAction_ACTION_BUY_DEV_CARD:        return core::ActionKind::BUY_DEV_CARD;
+        case catan_PlayerAction_ACTION_PLACE_ROBBER:        return core::ActionKind::PLACE_ROBBER;
+        case catan_PlayerAction_ACTION_STEAL_FROM:          return core::ActionKind::STEAL_FROM;
+        case catan_PlayerAction_ACTION_DISCARD:             return core::ActionKind::DISCARD;
+        case catan_PlayerAction_ACTION_BANK_TRADE:          return core::ActionKind::BANK_TRADE;
+        case catan_PlayerAction_ACTION_TRADE_OFFER:         return core::ActionKind::TRADE_OFFER;
+        case catan_PlayerAction_ACTION_TRADE_ACCEPT:        return core::ActionKind::TRADE_ACCEPT;
+        case catan_PlayerAction_ACTION_TRADE_DECLINE:       return core::ActionKind::TRADE_DECLINE;
+        case catan_PlayerAction_ACTION_TRADE_CANCEL:        return core::ActionKind::TRADE_CANCEL;
+        case catan_PlayerAction_ACTION_PLAY_KNIGHT:         return core::ActionKind::PLAY_KNIGHT;
+        case catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING:  return core::ActionKind::PLAY_ROAD_BUILDING;
         case catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY: return core::ActionKind::PLAY_YEAR_OF_PLENTY;
-        case catan_PlayerAction_ACTION_PLAY_MONOPOLY:      return core::ActionKind::PLAY_MONOPOLY;
-        default:                                           return core::ActionKind::NONE;
+        case catan_PlayerAction_ACTION_PLAY_MONOPOLY:       return core::ActionKind::PLAY_MONOPOLY;
+        default:                                            return core::ActionKind::NONE;
     }
 }
 
-// ---------------------------------------------------------------------------
-// Effect → hardware side-effects
-// ---------------------------------------------------------------------------
 static const char* rejectReasonName(core::RejectReason r) {
     switch (r) {
         case core::RejectReason::OUT_OF_TURN:              return "OUT_OF_TURN";
@@ -155,8 +151,12 @@ static const char* rejectReasonName(core::RejectReason r) {
     }
 }
 
+// Forward declarations.
 static void broadcastBoardState();
 
+// ---------------------------------------------------------------------------
+// Effect → hardware side-effects
+// ---------------------------------------------------------------------------
 static void applyEffect(const core::Effect& ef) {
     using core::EffectKind;
     switch (ef.kind) {
@@ -175,8 +175,6 @@ static void applyEffect(const core::Effect& ef) {
             LOGI("LOBBY", "connected mask=0x%02X (%u players, ready=0x%02X)",
                  (unsigned)mask, (unsigned)game::numPlayers(),
                  (unsigned)game::readyMask());
-            // Only update LEDs in LOBBY phase — this effect can be queued
-            // from an earlier phase and must not override gameplay lighting.
             if (game::phase() == GamePhase::LOBBY) {
                 led::setAllTiles(CRGB(20, 20, 40));
                 for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
@@ -246,8 +244,6 @@ static void applyEffect(const core::Effect& ef) {
                  (unsigned)(game::currentPlayer() + 1),
                  (unsigned)d1, (unsigned)d2, (unsigned)total,
                  ef.c ? " -> ROBBER" : "");
-            // Broadcast immediately so the phone sees the result at the same
-            // moment the board starts flashing, not after the blocking flash.
             broadcastBoardState();
             last_broadcast_ms = millis();
             uint8_t matching[TILE_COUNT];
@@ -333,16 +329,10 @@ static void applyEffect(const core::Effect& ef) {
         case EffectKind::WINNER: {
             uint8_t w = ef.a;
             LOGI("WINNER", "P%u reached %u VP", (unsigned)(w + 1), (unsigned)VP_TO_WIN);
-            for (uint8_t i = 0; i < 5; ++i) {
-                led::setAllTiles(kPlayerColors[w % MAX_PLAYERS]);
-                led::show();
-                delay(300);
-                led::setAllTiles(CRGB::Black);
-                led::show();
-                delay(300);
-            }
-            led::colorAllTilesByBiome();
-            led::show();
+            // Schedule a long celebratory flash on every tile (non-blocking).
+            uint8_t all[TILE_COUNT];
+            for (uint8_t i = 0; i < TILE_COUNT; ++i) all[i] = i;
+            led::flashTiles(all, TILE_COUNT, kPlayerColors[w % MAX_PLAYERS], 6, 300);
             break;
         }
         default:
@@ -351,7 +341,7 @@ static void applyEffect(const core::Effect& ef) {
 }
 
 // ---------------------------------------------------------------------------
-// Sensor pump — translates debounced presence changes into StateMachine events
+// Sensor → FSM
 // ---------------------------------------------------------------------------
 static void pumpSensors() {
     for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
@@ -380,16 +370,11 @@ static void pumpSensors() {
 }
 
 // ---------------------------------------------------------------------------
-// UART mega_link → game (PlayerInput + PlayerPresence dispatch)
+// BLE → FSM (PlayerInput) and presence tracking
 // ---------------------------------------------------------------------------
-static void handlePlayerInputFrame(const uint8_t* payload, uint16_t len) {
-    catan_PlayerInput in = catan_PlayerInput_init_zero;
-    if (!catan_decode_player_input(payload, len, &in)) {
-        LOGW("LINK", "PlayerInput decode fail (len=%u)", (unsigned)len);
-        return;
-    }
+static void onPlayerInput(const catan_PlayerInput& in) {
     if (in.player_id >= MAX_PLAYERS) {
-        LOGW("LINK", "PlayerInput bad player_id=%u", (unsigned)in.player_id);
+        LOGW("BLE", "PlayerInput bad player_id=%u", (unsigned)in.player_id);
         return;
     }
     LOGI("INPUT", "P%u action=%u client='%s'",
@@ -406,53 +391,34 @@ static void handlePlayerInputFrame(const uint8_t* payload, uint16_t len) {
     p.want[2] = (uint8_t)(in.want_grain  & 0xFF);
     p.want[3] = (uint8_t)(in.want_brick  & 0xFF);
     p.want[4] = (uint8_t)(in.want_ore    & 0xFF);
-    p.target      = (uint8_t)(in.target_player & 0xFF);
-    p.robber_tile = (uint8_t)(in.robber_tile   & 0xFF);
-    p.monopoly_res = (uint8_t)(in.monopoly_res & 0xFF);
-    p.card_res_1  = (uint8_t)(in.card_res_1    & 0xFF);
-    p.card_res_2  = (uint8_t)(in.card_res_2    & 0xFF);
-    // READY: empty payload means "toggle".
+    p.target       = (uint8_t)(in.target_player & 0xFF);
+    p.robber_tile  = (uint8_t)(in.robber_tile   & 0xFF);
+    p.monopoly_res = (uint8_t)(in.monopoly_res  & 0xFF);
+    p.card_res_1   = (uint8_t)(in.card_res_1    & 0xFF);
+    p.card_res_2   = (uint8_t)(in.card_res_2    & 0xFF);
     p.aux = 0xFF;
 
     sm.handlePlayerAction(in.player_id, toActionKind(in.action), p);
 }
 
-static void handlePresenceFrame(const uint8_t* payload, uint16_t len) {
-    catan_PlayerPresence pres = catan_PlayerPresence_init_zero;
-    if (!catan_decode_player_presence(payload, len, &pres)) {
-        LOGW("LINK", "PlayerPresence decode fail (len=%u)", (unsigned)len);
-        return;
-    }
-    uint8_t mask = (uint8_t)(pres.connected_mask & 0x0F);
+static void onPresenceChanged(uint8_t mask) {
     uint8_t highest = 0;
     for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
         bool c = (mask & (1u << p)) != 0;
         game::setPlayerConnected(p, c);
         if (c) highest = (uint8_t)(p + 1);
-        if (!c) game::setPlayerReady(p, false);   // disconnect drops ready
+        if (!c) game::setPlayerReady(p, false);
     }
-    // Only update the player count in LOBBY — once a game is in progress the
-    // hub may send a transient mask=0x00 (e.g. on reboot) that must not
-    // corrupt num_players (which nextTurn() uses for modulo arithmetic).
     if (game::phase() == GamePhase::LOBBY) {
         game::setNumPlayers(highest);
     }
     LOGI("PRES", "mask=0x%02X num_players=%u phase=%s",
-         (unsigned)mask, (unsigned)game::numPlayers(), game::phaseName(game::phase()));
-}
-
-static void onLinkFrame(uint8_t type, const uint8_t* payload, uint16_t len) {
-    switch (type) {
-        case CATAN_MSG_PLAYER_INPUT:    handlePlayerInputFrame(payload, len); break;
-        case CATAN_MSG_PLAYER_PRESENCE: handlePresenceFrame(payload, len);    break;
-        default:
-            LOGW("LINK", "unknown frame type=0x%02X len=%u", type, len);
-            break;
-    }
+         (unsigned)mask, (unsigned)game::numPlayers(),
+         game::phaseName(game::phase()));
 }
 
 // ---------------------------------------------------------------------------
-// BoardState broadcast (Mega -> hub -> mobiles)
+// BoardState broadcast
 // ---------------------------------------------------------------------------
 static void broadcastBoardState() {
     catan_BoardState s = catan_BoardState_init_zero;
@@ -498,13 +464,9 @@ static void broadcastBoardState() {
         s.res_ore[p]    = game::resCount(p, Res::ORE);
     }
 
-    // Single-shot placement rejection for the current player.
     s.last_reject_reason = game::lastRejectReason();
 
-    // Vertex ownership — 54 vertices packed as 27 bytes (two nibbles per byte).
-    //   nibble 0x0..0x3 = settlement P0..P3
-    //   nibble 0x4..0x7 = city       P0..P3 (owner = nibble & 0x3)
-    //   nibble 0xF      = empty
+    // Vertex ownership — 54 vertices / 27 bytes (two nibbles per byte).
     s.vertex_owners.size = 27;
     memset(s.vertex_owners.bytes, 0xFF, 27);
     for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
@@ -521,9 +483,7 @@ static void broadcastBoardState() {
         }
     }
 
-    // Edge ownership — 72 edges packed as 36 bytes (two nibbles per byte).
-    //   nibble 0x0..0x3 = road P0..P3
-    //   nibble 0xF      = empty
+    // Edge ownership — 72 edges / 36 bytes.
     s.edge_owners.size = 36;
     memset(s.edge_owners.bytes, 0xFF, 36);
     for (uint8_t e = 0; e < EDGE_COUNT; ++e) {
@@ -540,7 +500,6 @@ static void broadcastBoardState() {
         }
     }
 
-    // ── Dev cards / knights / road / largest army ─────────────────────────
     s.dev_cards.size = MAX_PLAYERS * 5;
     for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
         s.dev_cards.bytes[p * 5 + 0] = game::devCardCount(p, Dev::KNIGHT);
@@ -557,13 +516,11 @@ static void broadcastBoardState() {
     s.dev_deck_remaining   = game::devDeckRemaining();
     s.card_played_this_turn = game::cardPlayedThisTurn();
 
-    // ── Discard / steal masks ─────────────────────────────────────────────
     s.discard_required_mask = game::discardRequiredMask();
     s.discard_required_count.size = MAX_PLAYERS;
     for (uint8_t p = 0; p < MAX_PLAYERS; ++p) s.discard_required_count.bytes[p] = game::discardRequiredCount(p);
     s.steal_eligible_mask = game::stealEligibleMask();
 
-    // ── Pending purchases / free roads ─────────────────────────────────────
     s.pending_road_buy.size       = MAX_PLAYERS;
     s.pending_settlement_buy.size = MAX_PLAYERS;
     s.pending_city_buy.size       = MAX_PLAYERS;
@@ -575,7 +532,6 @@ static void broadcastBoardState() {
         s.free_roads_remaining.bytes[p]   = game::freeRoadsRemaining(p);
     }
 
-    // ── Trade ──────────────────────────────────────────────────────────────
     {
         const auto& t = game::pendingTrade();
         s.trade_from_player = (t.from == NO_PLAYER) ? 0xFF : t.from;
@@ -588,26 +544,40 @@ static void broadcastBoardState() {
         }
     }
 
-    // ── Bank supply / last distribution ────────────────────────────────────
     s.bank_supply.size = 5;
     for (uint8_t r = 0; r < 5; ++r) s.bank_supply.bytes[r] = game::bankSupply((Res)r);
-
     {
         const uint8_t* dist = game::lastDistribution();
         s.last_distribution.size = MAX_PLAYERS * 5;
         for (uint8_t i = 0; i < MAX_PLAYERS * 5; ++i) s.last_distribution.bytes[i] = dist[i];
     }
 
-    uint8_t buf[CATAN_MAX_PAYLOAD];
+    static uint8_t buf[CATAN_MAX_PAYLOAD];
     size_t n = catan_encode_board_state(&s, buf, sizeof(buf));
     if (n == 0) {
         LOGE("BCAST", "BoardState encode fail");
         return;
     }
-    // Clear the single-shot rejection field after it has been encoded so
-    // subsequent broadcasts carry 0 (no rejection).
     game::clearLastRejectReason();
-    mega_link::send(CATAN_MSG_BOARD_STATE, buf, (uint16_t)n);
+    comms::broadcastBoardState(buf, n);
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat
+// ---------------------------------------------------------------------------
+static void logHeartbeat() {
+    const auto& cs = comms::stats();
+    LOGI("HB", "phase=%s loops=%lu mask=0x%02X ready=0x%02X "
+              "ble conn=%u rx_ok=%lu rx_drop=%lu state_tx=%lu pres_evt=%lu",
+         game::phaseName(game::phase()),
+         (unsigned long)loop_count,
+         (unsigned)game::connectedMask(),
+         (unsigned)game::readyMask(),
+         (unsigned)comms::connectedCount(),
+         (unsigned long)cs.inputs_rx,
+         (unsigned long)cs.inputs_dropped,
+         (unsigned long)cs.state_notified,
+         (unsigned long)cs.presence_events);
 }
 
 // =============================================================================
@@ -615,57 +585,32 @@ static void broadcastBoardState() {
 // =============================================================================
 void setup() {
     Serial.begin(SERIAL_BAUD);
-    while (!Serial) { ; }
-
+    delay(150);
     Serial.println();
     Serial.println(F("======================================"));
-    Serial.println(F(" Settlers of Catan - Board Controller"));
-    Serial.print  (F(" Proto v"));
-    Serial.println(CATAN_PROTO_VERSION);
+    Serial.println(F(" Settlers of Catan — ESP32-C6 Board"));
+    Serial.print  (F(" Proto v")); Serial.println(CATAN_PROTO_VERSION);
     Serial.println(F("======================================"));
 
-    LOGI("BOOT", "Wire.begin() @100kHz (sensor bus only)");
-    Serial.flush();
-    Wire.begin();
-    Wire.setClock(100000);
-    Wire.setWireTimeout(25000UL, /*reset_on_timeout=*/true);
-
-    LOGI("BOOT", "led::init");
-    Serial.flush();
+    LOGI("BOOT", "led::init  (data pin=%d, count=%u)",
+         LED_DATA_PIN, (unsigned)TOTAL_LED_COUNT);
     led::init();
 
-    LOGI("BOOT", "sensor::init (probe %u expanders)", (unsigned)EXPANDER_COUNT);
-    Serial.flush();
-    {
-        uint8_t found = 0;
-        for (uint8_t i = 0; i < EXPANDER_COUNT; ++i) {
-            Wire.beginTransmission(EXPANDER_ADDRS[i]);
-            uint8_t rc = Wire.endTransmission();
-            if (rc == 0) {
-                LOGI("I2C", "  expander 0x%02X OK", (unsigned)EXPANDER_ADDRS[i]);
-                found++;
-            } else {
-                LOGW("I2C", "  expander 0x%02X missing (rc=%u)",
-                     (unsigned)EXPANDER_ADDRS[i], (unsigned)rc);
-            }
-            Serial.flush();
-        }
-        LOGI("I2C", "probe done: %u/%u expanders present",
-             (unsigned)found, (unsigned)EXPANDER_COUNT);
-    }
+    LOGI("BOOT", "sensor::init (SDA=%d SCL=%d @%lu Hz)",
+         I2C_SDA_PIN, I2C_SCL_PIN, (unsigned long)I2C_BUS_HZ);
     sensor::init();
 
-    uint16_t dice_seed = (uint16_t)analogRead(A0);
-    LOGI("BOOT", "dice::init seed=%u", (unsigned)dice_seed);
-    Serial.flush();
-    dice::init(dice_seed);
+    // Mix two unrelated entropy sources: ADC analog noise + esp_random()
+    // (which uses the on-chip TRNG once Wi-Fi/BT are running).
+    uint32_t seed = (uint32_t)analogRead(0) ^ esp_random();
+    LOGI("BOOT", "dice::init seed=0x%08lX", (unsigned long)seed);
+    dice::init((uint16_t)(seed & 0xFFFF));
+    core::rng::seed(seed);
 
-    LOGI("BOOT", "mega_link::init (Serial1 to BLE hub)");
-    Serial.flush();
-    mega_link::init(onLinkFrame);
+    LOGI("BOOT", "comms::init  (NimBLE peripheral)");
+    comms::init();
 
     LOGI("BOOT", "game::init");
-    Serial.flush();
     game::init();
     sm.reset();
 
@@ -683,51 +628,42 @@ void setup() {
     }
 }
 
-static void logHeartbeat() {
-    const mega_link::Stats& s = mega_link::stats();
-    LOGI("HB", "phase=%s loops=%lu mask=0x%02X ready=0x%02X uart rx=%lu fr=%lu bad_crc=%lu tx=%lu drop=%lu",
-         game::phaseName(game::phase()),
-         (unsigned long)loop_count,
-         (unsigned)game::connectedMask(),
-         (unsigned)game::readyMask(),
-         (unsigned long)s.rx_bytes,
-         (unsigned long)s.rx_frames,
-         (unsigned long)s.rx_bad_crc,
-         (unsigned long)s.tx_frames,
-         (unsigned long)s.tx_dropped);
-}
-
 void loop() {
-    loop_count++;
+    ++loop_count;
+    const uint32_t now = millis();
 
     if (DEMO_MODE) {
-        if (millis() - last_demo_ms >= DEMO_CYCLE_MS) {
-            last_demo_ms = millis();
+        if (now - last_demo_ms >= DEMO_CYCLE_MS) {
+            last_demo_ms = now;
             runDemoFrame();
         }
-        delay(SENSOR_POLL_MS);
+        vTaskDelay(pdMS_TO_TICKS(SENSOR_POLL_MS));
         return;
     }
 
     sensor::poll();
     pumpSensors();
 
-    mega_link::poll();    // dispatches PlayerInput + PlayerPresence
+    comms::poll(onPlayerInput, onPresenceChanged);
+    comms::tick();
 
-    sm.tick(millis());
+    sm.tick(now);
 
     core::Effect ef;
     while (sm.pollEffect(ef)) applyEffect(ef);
 
-    if (millis() - last_broadcast_ms >= STATE_BROADCAST_MS) {
-        last_broadcast_ms = millis();
+    led::tick(now);
+
+    if (now - last_broadcast_ms >= STATE_BROADCAST_MS) {
+        last_broadcast_ms = now;
         broadcastBoardState();
     }
 
-    if (millis() - last_heartbeat_ms >= HEARTBEAT_MS) {
-        last_heartbeat_ms = millis();
+    if (now - last_heartbeat_ms >= HEARTBEAT_MS) {
+        last_heartbeat_ms = now;
         logHeartbeat();
     }
 
-    delay(SENSOR_POLL_MS);
+    // vTaskDelay yields to the NimBLE host task, FastLED RMT ISR, etc.
+    vTaskDelay(pdMS_TO_TICKS(SENSOR_POLL_MS));
 }

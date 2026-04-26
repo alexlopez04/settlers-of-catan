@@ -14,7 +14,7 @@
 // =============================================================================
 
 // ── Wire constants (must match firmware/*/src/proto/catan.pb.h) ─────────────
-export const CATAN_PROTO_VERSION = 7;
+export const CATAN_PROTO_VERSION = 8;
 
 // ── Enums (mirror catan.proto) ──────────────────────────────────────────────
 

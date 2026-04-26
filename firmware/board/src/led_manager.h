@@ -29,4 +29,7 @@ void undimTile(uint8_t tile_id);
 void show();
 void clear();
 
+// Drive non-blocking flash animations forward. Call once per loop tick.
+void tick(uint32_t now_ms);
+
 }  // namespace led

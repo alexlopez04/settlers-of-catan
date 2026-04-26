@@ -51,8 +51,7 @@ void setup() {
     Serial.println(F("        [CHANGE] exp=0xAA bit=B HIGH (released)"));
     Serial.println();
 
-    Wire.begin();
-    Wire.setClock(100000UL);  // 100 kHz — matches the rest of the firmware
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, I2C_BUS_HZ);
 
     // Set all expander pins to input with pull-ups by writing 0xFFFF.
     // Quasi-bidirectional I/O: writing 1 enables the weak pull-up and
