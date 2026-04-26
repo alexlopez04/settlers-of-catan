@@ -196,6 +196,7 @@ static void broadcastBoardState();
 // LED helper: sync LED state to current game phase after a save/restore.
 // ---------------------------------------------------------------------------
 static void syncLedsToPhase_() {
+    led::cancelAllJobs();
     const GamePhase rp = game::phase();
     if (rp == GamePhase::PLAYING || rp == GamePhase::ROBBER ||
         rp == GamePhase::DISCARD  || rp == GamePhase::GAME_OVER ||
@@ -221,8 +222,10 @@ static void applyEffect(const core::Effect& ef) {
             GamePhase p = (GamePhase)ef.a;
             LOGI("FSM", "phase -> %s", game::phaseName(p));
             if (p == GamePhase::LOBBY) {
+                led::cancelAllJobs();
                 showLobbyLeds();
             } else if (p == GamePhase::PLAYING) {
+                led::cancelAllJobs();
                 led::colorAllTilesByBiome();
                 if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
                 led::show();
@@ -243,7 +246,8 @@ static void applyEffect(const core::Effect& ef) {
                 static uint8_t s_prevMask = 0;
                 uint8_t added = mask & ~s_prevMask;
                 s_prevMask = mask;
-                // Set lobby base colors first so the flash restores correctly.
+                // Cancel any in-flight lobby flash before resetting base colors.
+                led::cancelAllJobs();
                 showLobbyLeds();
                 if (added) {
                     // Find the lowest newly-connected player and flash all tiles.
@@ -262,6 +266,7 @@ static void applyEffect(const core::Effect& ef) {
         }
         case EffectKind::BOARD_RANDOMIZED: {
             LOGI("SETUP", "board randomized");
+            led::cancelAllJobs();
             led::colorAllTilesByBiome();
             for (uint8_t p = 0; p < PORT_COUNT; ++p) {
                 led::setPortColor(p, portColor(PORT_TOPO[p].type));
@@ -276,6 +281,7 @@ static void applyEffect(const core::Effect& ef) {
         }
         case EffectKind::REVEAL_NUMBER_CHANGED: {
             uint8_t num = ef.a;
+            led::cancelAllJobs();
             if (num == 0) {
                 led::colorAllTilesByBiome();
                 if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
@@ -745,7 +751,7 @@ void setup() {
 
     // Power-on indicator: full white until the lobby pattern takes over.
     led::setAllTiles(CRGB::White);
-    led::show();
+    led::commit();  // immediate hardware update needed before the delay
     delay(500);
 
     game::setPhase(GamePhase::LOBBY);
@@ -784,6 +790,7 @@ void loop() {
     while (sm.pollEffect(ef)) applyEffect(ef);
 
     led::tick(now);
+    led::commit();  // single FastLED.show() per loop — prevents RMT corruption
 
     if (now - last_broadcast_ms >= STATE_BROADCAST_MS) {
         last_broadcast_ms = now;

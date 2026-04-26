@@ -16,6 +16,12 @@ namespace {
 CRGB g_leds[TOTAL_LED_COUNT];
 CRGB g_tile_base[TILE_COUNT];
 
+// Set true whenever g_leds is modified; cleared by commit() after FastLED.show().
+// All LED-write paths set this flag; FastLED.show() is called exactly ONCE per
+// loop iteration via led::commit() to prevent back-to-back RMT transmissions
+// from corrupting the WS2812B data stream mid-strip.
+static bool g_needs_show = false;
+
 CRGB biomeColor(Biome b) {
     switch (b) {
         case Biome::FOREST:   return CRGB(0, 200, 0);
@@ -106,12 +112,16 @@ void flashTiles(const uint8_t* tile_ids, uint8_t num_tiles,
         j.interval_ms = interval_ms;
         j.next_toggle_ms = millis() + interval_ms;
         renderJob(j);
-        FastLED.show();
+        g_needs_show = true;
         return;
     }
-    // No free job slot: just blink immediately as a fall-back.
-    for (uint8_t i = 0; i < num_tiles; ++i) setTileColor(tile_ids[i], color);
-    FastLED.show();
+    // No free job slot: illuminate immediately but do NOT update g_tile_base so
+    // the biome colour is preserved for the next full redraw.
+    for (uint8_t i = 0; i < num_tiles; ++i) {
+        const TileLedMap& m = TILE_LED_MAP[tile_ids[i]];
+        for (uint8_t k = 0; k < m.count; ++k) g_leds[m.indices[k]] = color;
+    }
+    g_needs_show = true;
 }
 
 void highlightTile(uint8_t tile_id, const CRGB& color, uint16_t duration_ms) {
@@ -121,22 +131,36 @@ void highlightTile(uint8_t tile_id, const CRGB& color, uint16_t duration_ms) {
 }
 
 void dimTile(uint8_t tile_id) {
-    if (tile_id >= TILE_COUNT) return;
-    const TileLedMap& m = TILE_LED_MAP[tile_id];
-    for (uint8_t i = 0; i < m.count; ++i) g_leds[m.indices[i]] = CRGB::Black;
+    // Use setTileColor so g_tile_base is updated to Black.  Flash jobs that
+    // include this tile will correctly restore to Black (dimmed) when they end.
+    setTileColor(tile_id, CRGB::Black);
 }
 
 void undimTile(uint8_t tile_id) {
-    if (tile_id >= TILE_COUNT) return;
-    const TileLedMap& m = TILE_LED_MAP[tile_id];
-    for (uint8_t i = 0; i < m.count; ++i) g_leds[m.indices[i]] = g_tile_base[tile_id];
+    // Restore biome colour via colorTileByBiome so g_tile_base is also updated.
+    colorTileByBiome(tile_id);
 }
 
-void show() { FastLED.show(); }
+void cancelAllJobs() {
+    // Deactivate every in-flight flash job immediately.  Call this before any
+    // bulk LED reset (colorAllTilesByBiome, setAllTiles, showLobbyLeds, etc.)
+    // so stale animations cannot overwrite the new LED state in a future tick.
+    for (auto& j : g_jobs) j.active = false;
+}
+
+void show() { g_needs_show = true; }
+
+void commit() {
+    if (g_needs_show) {
+        FastLED.show();
+        g_needs_show = false;
+    }
+}
 
 void clear() {
-    FastLED.clear(true);
+    FastLED.clear(true);  // internally calls show
     memset(g_tile_base, 0, sizeof(g_tile_base));
+    g_needs_show = false;  // already transmitted
 }
 
 void tick(uint32_t now_ms) {
@@ -157,7 +181,7 @@ void tick(uint32_t now_ms) {
         }
         dirty = true;
     }
-    if (dirty) FastLED.show();
+    if (dirty) g_needs_show = true;
 }
 
 }  // namespace led
