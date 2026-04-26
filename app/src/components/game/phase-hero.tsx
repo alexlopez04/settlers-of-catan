@@ -4,8 +4,6 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
-  withSpring,
-  withSequence,
 } from 'react-native-reanimated';
 
 import { Spacing } from '@/constants/theme';
@@ -50,19 +48,15 @@ export function FadeSlideIn({ children, triggerKey }: {
   children: React.ReactNode;
   triggerKey: string | number;
 }) {
-  const opacity    = useSharedValue(0);
-  const translateY = useSharedValue(18);
+  const opacity = useSharedValue(0);
 
   useEffect(() => {
-    opacity.value    = 0;
-    translateY.value = 18;
-    opacity.value    = withTiming(1, { duration: 280 });
-    translateY.value = withSpring(0, { damping: 18, stiffness: 180 });
+    opacity.value = 0;
+    opacity.value = withTiming(1, { duration: 280 });
   }, [triggerKey]);
 
   const animStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
-    transform: [{ translateY: translateY.value }],
   }));
 
   return <Animated.View style={animStyle}>{children}</Animated.View>;
@@ -76,32 +70,14 @@ function LobbySlot({ index, connected, isMe, theme }: {
   isMe: boolean;
   theme: ReturnType<typeof useTheme>;
 }) {
-  const scale        = useSharedValue(1);
-  const prevConnected = useRef(connected);
-
-  useEffect(() => {
-    if (connected && !prevConnected.current) {
-      scale.value = withSequence(
-        withSpring(1.12, { damping: 5, stiffness: 300 }),
-        withSpring(1, { damping: 12, stiffness: 200 }),
-      );
-    }
-    prevConnected.current = connected;
-  }, [connected]);
-
-  const slotStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
   return (
-    <Animated.View
+    <View
       style={[
         s.lobbySlot,
         {
           backgroundColor: connected ? theme.primary : theme.background,
           borderColor: connected ? theme.primary : theme.textSecondary,
         },
-        slotStyle,
       ]}>
       <Text style={[s.lobbySlotText, { color: connected ? '#fff' : theme.textSecondary }]}>
         P{index + 1}
@@ -109,7 +85,7 @@ function LobbySlot({ index, connected, isMe, theme }: {
       <Text style={[s.lobbySlotSub, { color: connected ? 'rgba(255,255,255,0.8)' : theme.textSecondary }]}>
         {isMe ? 'you' : connected ? '●' : '○'}
       </Text>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -121,30 +97,13 @@ export function TurnChip({ myTurn, currentPlayer, theme }: {
   currentPlayer: number;
   theme: ReturnType<typeof useTheme>;
 }) {
-  const scale      = useSharedValue(1);
-  const prevMyTurn = useRef(false);
-
-  useEffect(() => {
-    if (myTurn && !prevMyTurn.current) {
-      scale.value = withSequence(
-        withSpring(1.1, { damping: 5, stiffness: 300 }),
-        withSpring(1, { damping: 12, stiffness: 200 }),
-      );
-    }
-    prevMyTurn.current = myTurn;
-  }, [myTurn]);
-
-  const chipStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
   return (
-    <Animated.View
-      style={[s.turnChip, { backgroundColor: myTurn ? theme.primary : theme.backgroundElement }, chipStyle]}>
+    <View
+      style={[s.turnChip, { backgroundColor: myTurn ? theme.primary : theme.backgroundElement }]}>
       <Text style={[s.turnChipText, { color: myTurn ? '#fff' : theme.text }]}>
         {myTurn ? '⬤  Your turn' : `Player ${currentPlayer + 1}'s turn`}
       </Text>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -159,7 +118,6 @@ function AnimatedDiceDisplay({ die1, die2, hasRolled, theme }: {
 }) {
   const [d1, setD1]     = useState(die1);
   const [d2, setD2]     = useState(die2);
-  const scale           = useSharedValue(1);
   const isFirst         = useRef(true);
   const prevHasRolled   = useRef(hasRolled);
 
@@ -184,8 +142,6 @@ function AnimatedDiceDisplay({ die1, die2, hasRolled, theme }: {
           clearInterval(interval);
           setD1(die1);
           setD2(die2);
-          scale.value = 0.7;
-          scale.value = withSpring(1, { damping: 8, stiffness: 100 });
         }
       }, 75);
       return () => clearInterval(interval);
@@ -196,18 +152,14 @@ function AnimatedDiceDisplay({ die1, die2, hasRolled, theme }: {
     }
   }, [hasRolled, die1, die2]);
 
-  const diceStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
   return (
     <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
-      <Animated.Text style={[s.diceDisplay, { color: theme.text }, diceStyle]}>
+      <Text style={[s.diceDisplay, { color: theme.text }]}>
         {DIE_FACES[d1]}  {DIE_FACES[d2]}
-      </Animated.Text>
-      <Animated.Text style={[s.diceTotal, { color: theme.primary }, diceStyle]}>
+      </Text>
+      <Text style={[s.diceTotal, { color: theme.primary }]}>
         {d1 + d2}
-      </Animated.Text>
+      </Text>
     </View>
   );
 }
@@ -222,29 +174,12 @@ function RevealHero({ gameState, theme }: {
   const revealNum = gameState?.revealNumber ?? 0;
   const idx       = REVEAL_ORDER.indexOf(revealNum);
   const placed    = idx >= 0 ? idx : REVEAL_ORDER.length;
-  const scale     = useSharedValue(1);
-  const prevNum   = useRef(revealNum);
-
-  useEffect(() => {
-    if (revealNum !== prevNum.current && revealNum > 0) {
-      scale.value = withSequence(
-        withSpring(1.3, { damping: 5, stiffness: 300 }),
-        withSpring(1, { damping: 10, stiffness: 200 }),
-      );
-    }
-    prevNum.current = revealNum;
-  }, [revealNum]);
-
-  const numStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
   return (
     <View style={[s.heroCard, { backgroundColor: theme.backgroundElement }]}>
       <Text style={[s.heroSub, { color: theme.textSecondary }]}>Placing number token</Text>
-      <Animated.Text style={[s.revealNumber, { color: theme.primary }, numStyle]}>
+      <Text style={[s.revealNumber, { color: theme.primary }]}>
         {revealNum > 0 ? revealNum : '—'}
-      </Animated.Text>
+      </Text>
       <View style={s.revealProgress}>
         {REVEAL_ORDER.map((n, i) => (
           <View

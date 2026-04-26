@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
-  withSpring,
-  withSequence,
   runOnJS,
 } from 'react-native-reanimated';
 
@@ -20,32 +18,15 @@ interface PlacementToastProps {
   theme: ReturnType<typeof useTheme>;
 }
 
-/**
- * A bold banner that slides in from the top of the screen and auto-dismisses.
- * Shown when the board rejects a piece placement for the current player.
- */
 export function PlacementToast({ message, theme }: PlacementToastProps) {
-  // Keep the last non-null message around so the exit animation can finish
-  // before the view unmounts.
   const [displayedMessage, setDisplayedMessage] = useState<string | null>(null);
-  const scale  = useSharedValue(0.85);
   const opacity = useSharedValue(0);
-  const shakeX  = useSharedValue(0);
 
   useEffect(() => {
     if (message) {
       setDisplayedMessage(message);
-      scale.value   = withSpring(1, { damping: 20, stiffness: 280 });
-      opacity.value = withTiming(1, { duration: 120 });
-      // Subtle shake
-      shakeX.value = withSequence(
-        withTiming( 5, { duration: 60 }),
-        withTiming(-5, { duration: 60 }),
-        withTiming( 3, { duration: 55 }),
-        withTiming( 0, { duration: 50 }),
-      );
+      opacity.value = withTiming(1, { duration: 150 });
     } else {
-      scale.value   = withSpring(0.85, { damping: 20, stiffness: 280 });
       opacity.value = withTiming(0, { duration: 200 }, (finished) => {
         if (finished) runOnJS(setDisplayedMessage)(null);
       });
@@ -54,20 +35,16 @@ export function PlacementToast({ message, theme }: PlacementToastProps) {
 
   const animStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
-    transform: [
-      { scale: scale.value },
-      { translateX: shakeX.value },
-    ],
   }));
 
   if (!displayedMessage) return null;
 
   return (
     <Animated.View pointerEvents="none" style={[s.overlay, animStyle]}>
-      <Animated.View style={[s.card, { backgroundColor: ERROR_RED, borderColor: ERROR_RED_DARK }]}>
+      <View style={[s.card, { backgroundColor: ERROR_RED, borderColor: ERROR_RED_DARK }]}>
         <SFSymbolIcon name="exclamationmark.octagon.fill" size={28} color="#fff" fallback="🚫" />
         <Text style={s.text} numberOfLines={3}>{displayedMessage}</Text>
-      </Animated.View>
+      </View>
     </Animated.View>
   );
 }
