@@ -68,6 +68,7 @@ EdgeState    edges[EDGE_COUNT];
 
 uint8_t      robber_tile_ = 0xFF;
 uint8_t      last_reject_reason_ = 0;
+Difficulty   difficulty_ = Difficulty::NORMAL;
 
 // Number reveal order (Catan standard: 2,3,…,6,8,…,12)
 constexpr uint8_t kRevealOrder[] = { 2, 3, 4, 5, 6, 8, 9, 10, 11, 12 };
@@ -107,6 +108,7 @@ void init() {
     reveal_index    = 0;
     robber_tile_    = 0xFF;
     last_reject_reason_ = 0;
+    difficulty_     = Difficulty::NORMAL;
     die1_ = die2_   = 0;
     has_rolled_     = false;
     setup_round_        = 0;
@@ -340,6 +342,10 @@ uint8_t readyMask() {
     return m;
 }
 void clearReady() { memset(player_ready_, 0, sizeof(player_ready_)); }
+
+// ── Difficulty ───────────────────────────────────────────────────────────────
+Difficulty difficulty() { return difficulty_; }
+void setDifficulty(Difficulty d) { difficulty_ = d; }
 
 // ── Ownership ───────────────────────────────────────────────────────────────
 const VertexState& vertexState(uint8_t v) {

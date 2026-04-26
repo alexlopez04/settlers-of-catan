@@ -68,6 +68,10 @@ enum PlayerAction {
   ACTION_PLAY_ROAD_BUILDING  = 23;
   ACTION_PLAY_YEAR_OF_PLENTY = 24;   // payload: card_res_1, card_res_2 (resource indices)
   ACTION_PLAY_MONOPOLY       = 25;   // payload: monopoly_res
+
+  // Lobby-only: Player 0 selects board generation difficulty.
+  // payload: monopoly_res carries the Difficulty value (0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT).
+  ACTION_SET_DIFFICULTY       = 26;
 }
 
 // Resource type (also used as index into per-player count arrays):
@@ -198,6 +202,10 @@ message BoardState {
   // in player-major order, one byte per (player, resource) — same layout
   // as `dev_cards`. All zero outside the distribution broadcast.
   bytes last_distribution = 61;
+
+  // Board generation difficulty selected by Player 0 in the lobby.
+  // 0 = EASY, 1 = NORMAL (default), 2 = HARD, 3 = EXPERT.
+  uint32 difficulty = 62;
 }
 
 message PlayerInput {

@@ -49,6 +49,14 @@ inline uint8_t biomeToResource(Biome b) {
     }
 }
 
+// Board generation difficulty (set by Player 1 in the lobby).
+enum class Difficulty : uint8_t {
+    EASY   = 0,  // Balanced / Beginner Friendly — constraint-based rejection sampling
+    NORMAL = 1,  // Classic Catan feel — near-standard random layout
+    HARD   = 2,  // Competitive / Skill-Focused — biased generation with scoring
+    EXPERT = 3,  // Punishing / Tournament Chaos — adversarial, maximally unfair
+};
+
 enum class SensorSource : uint8_t {
     DIRECT_GPIO,
     I2C_EXPANDER

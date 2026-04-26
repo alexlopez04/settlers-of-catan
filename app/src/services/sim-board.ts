@@ -14,6 +14,7 @@ import {
   CATAN_PROTO_VERSION,
   DEV_CARD_COUNT,
   DevCard,
+  Difficulty,
   GamePhase,
   NO_PLAYER,
   NO_WINNER,
@@ -101,6 +102,7 @@ export function createSimulatedState(): BoardState {
     },
     bankSupply:       [19, 19, 19, 19, 19],
     lastDistribution: ZERO20(),
+    difficulty:       Difficulty.NORMAL,
   };
 }
 

@@ -47,6 +47,10 @@ enum class ActionKind : uint8_t {
     PLAY_ROAD_BUILDING  = 23,
     PLAY_YEAR_OF_PLENTY = 24,
     PLAY_MONOPOLY       = 25,
+
+    // Lobby-only action: Player 0 selects the board generation difficulty.
+    // payload.aux = Difficulty value (0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT).
+    SET_DIFFICULTY      = 26,
 };
 
 // Action payload — flat parameter bundle decoupling the FSM from the proto

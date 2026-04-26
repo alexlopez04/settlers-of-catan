@@ -58,7 +58,33 @@ export enum PlayerAction {
   PLAY_ROAD_BUILDING = 23,
   PLAY_YEAR_OF_PLENTY = 24,
   PLAY_MONOPOLY = 25,
+
+  /** Lobby-only: Player 0 selects the board generation difficulty.
+   *  Encode with `encodeSetDifficulty`. payload: monopolyRes = Difficulty value. */
+  SET_DIFFICULTY = 26,
 }
+
+/** Board generation difficulty preset. Matches firmware Difficulty enum. */
+export enum Difficulty {
+  EASY   = 0,  // Balanced / Beginner Friendly
+  NORMAL = 1,  // Classic Catan feel (default)
+  HARD   = 2,  // Competitive / Skill-Focused
+  EXPERT = 3,  // Punishing / Tournament Chaos
+}
+
+export const DIFFICULTY_LABEL: Record<Difficulty, string> = {
+  [Difficulty.EASY]:   '🟢 Easy',
+  [Difficulty.NORMAL]: '🟡 Normal',
+  [Difficulty.HARD]:   '🟠 Hard',
+  [Difficulty.EXPERT]: '🔴 Expert',
+};
+
+export const DIFFICULTY_DESCRIPTION: Record<Difficulty, string> = {
+  [Difficulty.EASY]:   'Balanced & beginner friendly. No adjacent 6/8, fair resource spread.',
+  [Difficulty.NORMAL]: 'Classic Catan feel with a near-standard random layout.',
+  [Difficulty.HARD]:   'Competitive. Some scarcity, fewer prime intersections, tougher decisions.',
+  [Difficulty.EXPERT]: 'Brutal. High-variance, heavy clustering, few optimal starting spots.',
+};
 
 export enum Biome {
   DESERT = 0,
@@ -234,6 +260,9 @@ export interface BoardState {
   bankSupply: number[];
   /** Length 20 — most recent dice-roll distribution, player-major. */
   lastDistribution: number[];
+
+  /** Board generation difficulty (0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT). */
+  difficulty: Difficulty;
 }
 
 export interface PlayerInput {
@@ -533,6 +562,24 @@ export function encodePlayMonopoly(
   });
 }
 
+/**
+ * Encode a SET_DIFFICULTY action.
+ * Only Player 0 (player_id=0) should call this; the firmware silently ignores
+ * attempts from other players.
+ */
+export function encodeSetDifficulty(
+  playerId: number,
+  difficulty: Difficulty,
+  clientId?: string,
+): string {
+  return encodePlayerInput({
+    playerId,
+    action: PlayerAction.SET_DIFFICULTY,
+    clientId,
+    monopolyRes: difficulty,
+  });
+}
+
 /** Encode a UTF-8 string for the Identity characteristic (bare bytes). */
 export function encodeIdentity(clientId: string): string {
   return bytesToBase64(utf8Bytes(clientId));
@@ -598,6 +645,7 @@ function emptyBoardState(): BoardState {
     },
     bankSupply: ZERO5(),
     lastDistribution: ZERO20(),
+    difficulty: Difficulty.NORMAL,
   };
 }
 
@@ -689,6 +737,7 @@ function decodeBoardStatePayload(buf: Uint8Array): BoardState | null {
         case 39: state.stealEligibleMask = v; break;
         case 50: state.trade.fromPlayer = v; break;
         case 51: state.trade.toPlayer = v; break;
+        case 62: state.difficulty = v as Difficulty; break;
       }
     } else if (wireType === 2) {
       let len: number;

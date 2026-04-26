@@ -46,4 +46,4 @@ extern TileState       g_tile_state[TILE_COUNT];
 
 uint8_t tilesForVertex(uint8_t vertex_id, uint8_t out[], uint8_t max_out);
 uint8_t tilesForEdge(uint8_t edge_id, uint8_t out[], uint8_t max_out);
-void    randomizeBoardLayout();
+void    randomizeBoardLayout(Difficulty d = Difficulty::NORMAL);

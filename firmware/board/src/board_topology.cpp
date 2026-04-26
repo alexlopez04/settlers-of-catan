@@ -272,10 +272,9 @@ static void shuffleArray(uint8_t* arr, uint8_t n) {
     }
 }
 
-void randomizeBoardLayout() {
-    // Standard Catan biome distribution:
-    // 4 Forest, 4 Pasture, 4 Field, 3 Hill, 3 Mountain, 1 Desert = 19
-    uint8_t biomes[TILE_COUNT];
+// ── Board generator ──────────────────────────────────────────────────────────
+// Standard tile counts (FOREST=0, PASTURE=1, FIELD=2, HILL=3, MOUNTAIN=4, DESERT=5).
+static void fillBiomes(uint8_t biomes[TILE_COUNT]) {
     uint8_t idx = 0;
     for (uint8_t i = 0; i < 4; ++i) biomes[idx++] = (uint8_t)Biome::FOREST;
     for (uint8_t i = 0; i < 4; ++i) biomes[idx++] = (uint8_t)Biome::PASTURE;
@@ -283,21 +282,243 @@ void randomizeBoardLayout() {
     for (uint8_t i = 0; i < 3; ++i) biomes[idx++] = (uint8_t)Biome::HILL;
     for (uint8_t i = 0; i < 3; ++i) biomes[idx++] = (uint8_t)Biome::MOUNTAIN;
     biomes[idx++] = (uint8_t)Biome::DESERT;
+}
 
+// Standard number token pool.
+static void fillNumbers(uint8_t numbers[18]) {
+    static const uint8_t kTokens[18] = {
+        2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12
+    };
+    memcpy(numbers, kTokens, 18);
+}
+
+// Apply biome + number arrays to g_tile_state.
+static void applyLayout(const uint8_t biomes[TILE_COUNT], const uint8_t numbers[TILE_COUNT]) {
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        g_tile_state[t].biome  = (Biome)biomes[t];
+        g_tile_state[t].number = numbers[t];
+    }
+}
+
+// Generate one random layout into the provided arrays.
+// numbers[] uses TILE_COUNT slots; desert tile gets number 0.
+static void generateRandom(uint8_t biomes[TILE_COUNT], uint8_t numbers[TILE_COUNT]) {
+    fillBiomes(biomes);
     shuffleArray(biomes, TILE_COUNT);
 
-    // Standard number tokens (18 for 18 non-desert tiles):
-    // 1×2, 2×3, 2×4, 2×5, 2×6, 2×8, 2×9, 2×10, 2×11, 1×12
-    uint8_t numbers[] = { 2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12 };
-    shuffleArray(numbers, 18);
+    uint8_t pool[18];
+    fillNumbers(pool);
+    shuffleArray(pool, 18);
 
     uint8_t num_idx = 0;
     for (uint8_t t = 0; t < TILE_COUNT; ++t) {
-        g_tile_state[t].biome = (Biome)biomes[t];
-        if (g_tile_state[t].biome == Biome::DESERT) {
-            g_tile_state[t].number = 0;
-        } else {
-            g_tile_state[t].number = numbers[num_idx++];
+        numbers[t] = ((Biome)biomes[t] == Biome::DESERT) ? 0 : pool[num_idx++];
+    }
+}
+
+// ── Scoring ──────────────────────────────────────────────────────────────────
+// Maps a number token to its roll-probability "pip" weight (standard Catan dots).
+static uint8_t probWeight(uint8_t num) {
+    if (num == 0) return 0;
+    return (num <= 7) ? (uint8_t)(num - 1) : (uint8_t)(13 - num);
+    // 2→1, 3→2, 4→3, 5→4, 6→5, 8→5, 9→4, 10→3, 11→2, 12→1
+}
+
+// Compute a fairness score for a candidate board.
+// Higher score  = more imbalanced / unfair.
+// Lower score   = more balanced  / fair (what Easy aims for).
+//
+// Components:
+//   (a) Adjacent-high-number penalty: pairs of adjacent 6/8 tiles × 100
+//   (b) Resource-weight variance: sum of squared deviations from mean
+//       across the 5 biome types (scaled ×10)
+//   (c) Dead-vertex count: interior vertices (≥2 tile neighbours) with
+//       probability-weight sum == 0 × 30
+static int32_t scoreLayout(const uint8_t biomes[TILE_COUNT],
+                            const uint8_t numbers[TILE_COUNT]) {
+    // (a) Adjacent 6/8 pairs.
+    int32_t adj_penalty = 0;
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        if (numbers[t] != 6 && numbers[t] != 8) continue;
+        for (uint8_t j = 0; j < 6; ++j) {
+            uint8_t nb = TILE_TOPO[t].neighbors[j];
+            if (nb == NONE || nb <= t) continue;  // count each pair once
+            if (numbers[nb] == 6 || numbers[nb] == 8) ++adj_penalty;
         }
     }
+
+    // (b) Resource weight variance.
+    int32_t res_weight[5] = {0, 0, 0, 0, 0};  // indices FOREST..MOUNTAIN
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        uint8_t b = biomes[t];
+        if (b >= 5) continue;  // skip DESERT
+        res_weight[b] += (int32_t)probWeight(numbers[t]);
+    }
+    int32_t mean_w = 0;
+    for (uint8_t i = 0; i < 5; ++i) mean_w += res_weight[i];
+    mean_w /= 5;
+    int32_t variance = 0;
+    for (uint8_t i = 0; i < 5; ++i) {
+        int32_t d = res_weight[i] - mean_w;
+        variance += d * d;
+    }
+
+    // (c) Dead vertex count (interior vertices with pip-sum == 0).
+    int32_t dead_verts = 0;
+    for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+        uint8_t tile_cnt = 0;
+        int32_t pip_sum  = 0;
+        for (uint8_t j = 0; j < 3; ++j) {
+            uint8_t tid = VERTEX_TOPO[v].tiles[j];
+            if (tid == NONE) continue;
+            ++tile_cnt;
+            pip_sum += (int32_t)probWeight(numbers[tid]);
+        }
+        if (tile_cnt >= 2 && pip_sum == 0) ++dead_verts;
+    }
+
+    return adj_penalty * 100 + variance * 10 + dead_verts * 30;
+}
+
+// ── Constraint checker (for Easy) ────────────────────────────────────────────
+// Returns true if the board satisfies the Easy-mode constraints:
+//   - No adjacent 6/8 tiles.
+//   - Each of the 5 resource biomes has at least one tile with a
+//     high-probability number (5, 6, 8, or 9).
+//   - No interior vertex (≥2 productive neighbours) is fully dead.
+static bool satisfiesEasyConstraints(const uint8_t biomes[TILE_COUNT],
+                                      const uint8_t numbers[TILE_COUNT]) {
+    // No adjacent 6/8.
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        if (numbers[t] != 6 && numbers[t] != 8) continue;
+        for (uint8_t j = 0; j < 6; ++j) {
+            uint8_t nb = TILE_TOPO[t].neighbors[j];
+            if (nb == NONE || nb <= t) continue;
+            if (numbers[nb] == 6 || numbers[nb] == 8) return false;
+        }
+    }
+
+    // Each resource biome has ≥1 tile with number in {5,6,8,9}.
+    bool has_strong[5] = {};
+    for (uint8_t t = 0; t < TILE_COUNT; ++t) {
+        uint8_t b = biomes[t];
+        if (b >= 5) continue;
+        uint8_t n = numbers[t];
+        if (n == 5 || n == 6 || n == 8 || n == 9) has_strong[b] = true;
+    }
+    for (uint8_t i = 0; i < 5; ++i) if (!has_strong[i]) return false;
+
+    // No dead interior vertices.
+    for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+        uint8_t tile_cnt = 0;
+        int32_t pip_sum  = 0;
+        for (uint8_t j = 0; j < 3; ++j) {
+            uint8_t tid = VERTEX_TOPO[v].tiles[j];
+            if (tid == NONE) continue;
+            ++tile_cnt;
+            pip_sum += (int32_t)probWeight(numbers[tid]);
+        }
+        if (tile_cnt >= 2 && pip_sum == 0) return false;
+    }
+    return true;
+}
+
+// ── Multi-candidate sorter (selection sort by score, ascending) ──────────────
+static constexpr uint8_t MULTI_ATTEMPTS = 20;
+
+struct BoardCandidate {
+    uint8_t  biomes[TILE_COUNT];
+    uint8_t  numbers[TILE_COUNT];
+    int32_t  score;
+};
+
+static void sortCandidates(BoardCandidate* cands, uint8_t n) {
+    // Simple insertion sort — n ≤ MULTI_ATTEMPTS = 20.
+    for (uint8_t i = 1; i < n; ++i) {
+        BoardCandidate key = cands[i];
+        int8_t j = (int8_t)(i - 1);
+        while (j >= 0 && cands[j].score > key.score) {
+            cands[j + 1] = cands[j];
+            --j;
+        }
+        cands[j + 1] = key;
+    }
+}
+
+// ── Public randomization entry point ─────────────────────────────────────────
+
+void randomizeBoardLayout(Difficulty d) {
+    uint8_t biomes[TILE_COUNT];
+    uint8_t numbers[TILE_COUNT];
+
+    switch (d) {
+
+    // ── EASY ─────────────────────────────────────────────────────────────────
+    // Rejection-sample until all Easy constraints are met.
+    // After EASY_MAX_ATTEMPTS, fall back to the candidate with the lowest
+    // (most balanced) score seen so far.
+    case Difficulty::EASY: {
+        static constexpr uint8_t EASY_MAX_ATTEMPTS = 50;
+        uint8_t best_biomes[TILE_COUNT];
+        uint8_t best_numbers[TILE_COUNT];
+        int32_t best_score = INT32_MAX;
+
+        for (uint8_t attempt = 0; attempt < EASY_MAX_ATTEMPTS; ++attempt) {
+            generateRandom(biomes, numbers);
+            if (satisfiesEasyConstraints(biomes, numbers)) {
+                applyLayout(biomes, numbers);
+                return;
+            }
+            int32_t s = scoreLayout(biomes, numbers);
+            if (s < best_score) {
+                best_score = s;
+                memcpy(best_biomes, biomes, TILE_COUNT);
+                memcpy(best_numbers, numbers, TILE_COUNT);
+            }
+        }
+        // Fallback: best (most balanced) board seen.
+        applyLayout(best_biomes, best_numbers);
+        break;
+    }
+
+    // ── NORMAL ───────────────────────────────────────────────────────────────
+    // Classic Catan: one unconstrained shuffle.
+    case Difficulty::NORMAL:
+    default: {
+        generateRandom(biomes, numbers);
+        applyLayout(biomes, numbers);
+        break;
+    }
+
+    // ── HARD ─────────────────────────────────────────────────────────────────
+    // Generate MULTI_ATTEMPTS boards; pick the one at the 70th percentile
+    // of the fairness score (sort ascending, choose index ~0.7×n).
+    // This produces a board that is noticeably imbalanced but not punishing.
+    case Difficulty::HARD: {
+        BoardCandidate cands[MULTI_ATTEMPTS];
+        for (uint8_t i = 0; i < MULTI_ATTEMPTS; ++i) {
+            generateRandom(cands[i].biomes, cands[i].numbers);
+            cands[i].score = scoreLayout(cands[i].biomes, cands[i].numbers);
+        }
+        sortCandidates(cands, MULTI_ATTEMPTS);
+        // 70th percentile (index 14 of 20 when sorted ascending by score).
+        uint8_t pick = (uint8_t)(MULTI_ATTEMPTS * 70 / 100);
+        applyLayout(cands[pick].biomes, cands[pick].numbers);
+        break;
+    }
+
+    // ── EXPERT ───────────────────────────────────────────────────────────────
+    // Generate MULTI_ATTEMPTS boards; pick the most imbalanced (highest score).
+    case Difficulty::EXPERT: {
+        BoardCandidate cands[MULTI_ATTEMPTS];
+        for (uint8_t i = 0; i < MULTI_ATTEMPTS; ++i) {
+            generateRandom(cands[i].biomes, cands[i].numbers);
+            cands[i].score = scoreLayout(cands[i].biomes, cands[i].numbers);
+        }
+        sortCandidates(cands, MULTI_ATTEMPTS);
+        applyLayout(cands[MULTI_ATTEMPTS - 1].biomes, cands[MULTI_ATTEMPTS - 1].numbers);
+        break;
+    }
+
+    }  // end switch
 }

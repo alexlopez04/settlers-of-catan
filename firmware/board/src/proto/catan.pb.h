@@ -49,7 +49,10 @@ typedef enum _catan_PlayerAction {
     catan_PlayerAction_ACTION_PLAY_KNIGHT = 22,
     catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING = 23,
     catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY = 24, /* payload: card_res_1, card_res_2 (resource indices) */
-    catan_PlayerAction_ACTION_PLAY_MONOPOLY = 25 /* payload: monopoly_res */
+    catan_PlayerAction_ACTION_PLAY_MONOPOLY = 25, /* payload: monopoly_res */
+    /* Lobby-only: Player 0 selects board difficulty.
+       payload: monopoly_res carries the Difficulty value (0..3). */
+    catan_PlayerAction_ACTION_SET_DIFFICULTY = 26
 } catan_PlayerAction;
 
 /* Resource type (also used as index into per-player count arrays):
@@ -186,6 +189,12 @@ typedef struct _catan_BoardState {
  in player-major order, one byte per (player, resource) — same layout
  as `dev_cards`. All zero outside the distribution broadcast. */
     catan_BoardState_last_distribution_t last_distribution;
+    /* Board generation difficulty selected by Player 0 in the lobby.
+ 0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT.
+ has_difficulty is always set true so the field is encoded even when
+ the value is 0 (EASY), which proto3 would otherwise omit. */
+    bool has_difficulty;
+    uint32_t difficulty;
 } catan_BoardState;
 
 typedef struct _catan_PlayerInput {
@@ -237,8 +246,8 @@ extern "C" {
 #define _catan_GamePhase_ARRAYSIZE ((catan_GamePhase)(catan_GamePhase_PHASE_GAME_OVER+1))
 
 #define _catan_PlayerAction_MIN catan_PlayerAction_ACTION_NONE
-#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_PLAY_MONOPOLY
-#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_PLAY_MONOPOLY+1))
+#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_SET_DIFFICULTY
+#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_SET_DIFFICULTY+1))
 
 #define _catan_ResourceType_MIN catan_ResourceType_RES_LUMBER
 #define _catan_ResourceType_MAX catan_ResourceType_RES_ORE
@@ -254,9 +263,9 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0}
 #define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0}
 #define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -303,6 +312,7 @@ extern "C" {
 #define catan_BoardState_trade_want_tag          53
 #define catan_BoardState_bank_supply_tag         60
 #define catan_BoardState_last_distribution_tag   61
+#define catan_BoardState_difficulty_tag           62
 #define catan_PlayerInput_proto_version_tag      1
 #define catan_PlayerInput_player_id_tag          2
 #define catan_PlayerInput_action_tag             3
@@ -367,7 +377,8 @@ X(a, STATIC,   SINGULAR, UINT32,   trade_to_player,  51) \
 X(a, STATIC,   SINGULAR, BYTES,    trade_offer,      52) \
 X(a, STATIC,   SINGULAR, BYTES,    trade_want,       53) \
 X(a, STATIC,   SINGULAR, BYTES,    bank_supply,      60) \
-X(a, STATIC,   SINGULAR, BYTES,    last_distribution,  61)
+X(a, STATIC,   SINGULAR, BYTES,    last_distribution,  61) \
+X(a, STATIC,   OPTIONAL, UINT32,   difficulty,         62)
 #define catan_BoardState_CALLBACK NULL
 #define catan_BoardState_DEFAULT NULL
 

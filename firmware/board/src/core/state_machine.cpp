@@ -111,6 +111,18 @@ void StateMachine::handlePlayerAction(uint8_t player, ActionKind action,
     if (action == ActionKind::START_GAME)  { pending_start_game_  = true; return; }
     if (action == ActionKind::NEXT_NUMBER) { pending_next_number_ = true; return; }
 
+    // SET_DIFFICULTY — only Player 0 may change the difficulty, and only
+    // while in the LOBBY phase.
+    if (action == ActionKind::SET_DIFFICULTY) {
+        if (player == 0 && game::phase() == GamePhase::LOBBY) {
+            Difficulty d = (payload.aux <= (uint8_t)Difficulty::EXPERT)
+                               ? (Difficulty)payload.aux
+                               : Difficulty::NORMAL;
+            game::setDifficulty(d);
+        }
+        return;
+    }
+
     // DISCARD is allowed from any player whose bit is in the mask.
     if (action == ActionKind::DISCARD) {
         onDiscard_(player, payload.res);
@@ -677,7 +689,7 @@ void StateMachine::handleLobby_() {
 void StateMachine::handleBoardSetup_() {
     if (!board_setup_done_) {
         board_setup_done_ = true;
-        randomizeBoardLayout();
+        randomizeBoardLayout(game::difficulty());
         for (uint8_t t = 0; t < TILE_COUNT; ++t) {
             if (g_tile_state[t].biome == Biome::DESERT) {
                 game::setRobberTile(t);

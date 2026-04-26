@@ -149,6 +149,7 @@ static core::ActionKind toActionKind(catan_PlayerAction a) {
         case catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING:  return core::ActionKind::PLAY_ROAD_BUILDING;
         case catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY: return core::ActionKind::PLAY_YEAR_OF_PLENTY;
         case catan_PlayerAction_ACTION_PLAY_MONOPOLY:       return core::ActionKind::PLAY_MONOPOLY;
+        case catan_PlayerAction_ACTION_SET_DIFFICULTY:      return core::ActionKind::SET_DIFFICULTY;
         default:                                            return core::ActionKind::NONE;
     }
 }
@@ -439,7 +440,11 @@ static void onPlayerInput(const catan_PlayerInput& in) {
     p.monopoly_res = (uint8_t)(in.monopoly_res  & 0xFF);
     p.card_res_1   = (uint8_t)(in.card_res_1    & 0xFF);
     p.card_res_2   = (uint8_t)(in.card_res_2    & 0xFF);
-    p.aux = 0xFF;
+    // For SET_DIFFICULTY, the difficulty value is carried in monopoly_res.
+    if (in.action == catan_PlayerAction_ACTION_SET_DIFFICULTY)
+        p.aux = (uint8_t)(in.monopoly_res & 0xFF);
+    else
+        p.aux = 0xFF;
 
     sm.handlePlayerAction(in.player_id, toActionKind(in.action), p);
 }
@@ -594,6 +599,9 @@ static void broadcastBoardState() {
         s.last_distribution.size = MAX_PLAYERS * 5;
         for (uint8_t i = 0; i < MAX_PLAYERS * 5; ++i) s.last_distribution.bytes[i] = dist[i];
     }
+    // Always encode difficulty, even when EASY (=0) which proto3 would otherwise omit.
+    s.has_difficulty = true;
+    s.difficulty = (uint32_t)game::difficulty();
 
     static uint8_t buf[CATAN_MAX_PAYLOAD];
     size_t n = catan_encode_board_state(&s, buf, sizeof(buf));

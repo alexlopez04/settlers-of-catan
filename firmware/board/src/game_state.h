@@ -159,6 +159,10 @@ void    setPlayerReady(uint8_t player, bool ready);
 uint8_t readyMask();
 void    clearReady();
 
+// Board difficulty (set by Player 0 in the lobby, persisted until a new game starts).
+Difficulty difficulty();
+void       setDifficulty(Difficulty d);
+
 // Ownership
 const VertexState& vertexState(uint8_t vertex_id);
 const EdgeState&   edgeState(uint8_t edge_id);

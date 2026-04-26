@@ -597,6 +597,7 @@ export function TradePanel({
   state, myId, myTurn, sendInput, theme,
 }: CommonProps) {
   const [open, setOpen] = useState<'bank' | 'p2p' | null>(null);
+  const my = playerResources(state, myId);
 
   const canOffer =
     myTurn &&
@@ -608,6 +609,7 @@ export function TradePanel({
     <View style={s.section}>
       <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Trade</Text>
       <View style={[s.card, { backgroundColor: theme.backgroundElement }]}>
+        <ResourceBadgeRow values={my} theme={theme} />
         <View style={s.tradeButtons}>
           <Pressable
             disabled={!canOffer}
@@ -799,6 +801,7 @@ function TradeComposer({
           <Text style={[s.modalTitle, { color: theme.text }]}>
             {kind === 'bank' ? 'Trade with bank' : 'Trade with players'}
           </Text>
+          {kind === 'bank' && <ResourceBadgeRow values={my} theme={theme} />}
 
           {/* ── Give ── */}
           <Text style={[s.tradeMini, { color: theme.textSecondary }]}>

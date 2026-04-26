@@ -16,13 +16,14 @@ import { useBle } from '@/context/ble-context';
 import { Spacing } from '@/constants/theme';
 import { PHASE_LABEL, buttonsForPhase } from '@/constants/game';
 import { useTheme } from '@/hooks/use-theme';
-import { GamePhase, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES, DevCard, DEV_CARD_COUNT } from '@/services/proto';
+import { GamePhase, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES, DevCard, DEV_CARD_COUNT, Difficulty } from '@/services/proto';
 import { SFSymbolIcon } from '@/components/ui/symbol';
 import { BoardOverview } from '@/components/ui/board-overview';
 import { PlacementToast } from '@/components/game/placement-toast';
 import { PhaseHero, FadeSlideIn } from '@/components/game/phase-hero';
 import { ActionBar } from '@/components/game/action-bar';
 import { LobbyOrientationPicker } from '@/components/game/lobby-orientation';
+import { LobbyDifficultyPicker } from '@/components/game/lobby-difficulty-picker';
 import {
   ResourcesPanel,
   StorePanel,
@@ -247,6 +248,14 @@ export default function GameScreen() {
               theme={theme}
             />
           </FadeSlideIn>
+
+          {/* Difficulty selection in the lobby */}
+          {phase === GamePhase.LOBBY && (
+            <LobbyDifficultyPicker
+              currentDifficulty={gameState?.difficulty ?? Difficulty.NORMAL}
+              myId={myId}
+            />
+          )}
 
           {/* Orientation calibration in the lobby */}
           {phase === GamePhase.LOBBY && (
