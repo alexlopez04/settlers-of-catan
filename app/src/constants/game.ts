@@ -54,12 +54,15 @@ export interface ButtonSpec {
 /**
  * Returns only the buttons relevant for the current game state.
  * Buttons always expand to fill the bar (no placeholders).
+ * @param hasPendingTrade - when true, END_TURN is disabled until the open
+ *   player-to-player trade offer is resolved (accepted, declined, or cancelled).
  */
 export function buttonsForPhase(
   phase: GamePhase,
   myTurn: boolean,
   hasRolled: boolean,
   connectedCount: number,
+  hasPendingTrade?: boolean,
 ): ButtonSpec[] {
   switch (phase) {
     case GamePhase.LOBBY: {
@@ -82,7 +85,9 @@ export function buttonsForPhase(
       if (!hasRolled) {
         return [{ label: 'Roll Dice', sfSymbol: 'die.face.5.fill', action: PlayerAction.ROLL_DICE, enabled: myTurn, primary: myTurn }];
       }
-      return [{ label: 'End Turn', sfSymbol: 'arrow.trianglehead.clockwise', action: PlayerAction.END_TURN, enabled: myTurn, primary: myTurn }];
+      // Block End Turn while a player-to-player trade offer is pending.
+      const canEndTurn = myTurn && !hasPendingTrade;
+      return [{ label: 'End Turn', sfSymbol: 'arrow.trianglehead.clockwise', action: PlayerAction.END_TURN, enabled: canEndTurn, primary: canEndTurn }];
     }
     case GamePhase.ROBBER:
       // Robber tile picking is handled in a modal; provide Skip when applicable.

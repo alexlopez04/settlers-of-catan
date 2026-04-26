@@ -590,50 +590,90 @@ export function DiscardOverlay({
 
 // ── Trade panel + incoming offer dialog ────────────────────────────────────
 
+// Helper: render a compact summary row for a trade (offer → want).
+function TradeSummaryRow({ offer, want, theme }: { offer: number[]; want: number[]; theme: Theme }) {
+  const giveItems = RESOURCES.filter((_, i) => (offer[i] ?? 0) > 0);
+  const wantItems = RESOURCES.filter((_, i) => (want[i] ?? 0) > 0);
+  return (
+    <View style={s.tradeSummaryRow}>
+      <View style={s.tradeSummaryGroup}>
+        {giveItems.map((r, idx) => (
+          <Text key={r.key} style={s.tradeSummaryChip}>
+            {r.emoji}×{offer[RESOURCES.indexOf(r)]}
+          </Text>
+        ))}
+      </View>
+      <Text style={[s.tradeSummaryArrow, { color: theme.textSecondary }]}>→</Text>
+      <View style={s.tradeSummaryGroup}>
+        {wantItems.map(r => (
+          <Text key={r.key} style={s.tradeSummaryChip}>
+            {r.emoji}×{want[RESOURCES.indexOf(r)]}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 export function TradePanel({
   state, myId, myTurn, sendInput, theme,
 }: CommonProps) {
   const [open, setOpen] = useState<'bank' | 'p2p' | null>(null);
   const my = playerResources(state, myId);
+  const trade = state.trade;
+  const hasPending = trade.fromPlayer !== NO_PLAYER;
+  const iMyOffer = hasPending && trade.fromPlayer === myId;
 
-  const canOffer =
-    myTurn &&
-    state.phase === GamePhase.PLAYING &&
-    state.hasRolled &&
-    state.trade.fromPlayer === NO_PLAYER;
+  // Can start a new bank trade: my turn, playing, rolled, no pending p2p trade.
+  const canBankTrade = myTurn && state.phase === GamePhase.PLAYING && state.hasRolled && !hasPending;
+  // Can start a new p2p offer: same conditions.
+  const canOffer = canBankTrade;
 
   return (
     <View style={s.section}>
       <Text style={[s.sectionLabel, { color: theme.textSecondary }]}>Trade</Text>
       <View style={[s.card, { backgroundColor: theme.backgroundElement }]}>
         <ResourceBadgeRow values={my} theme={theme} />
-        <View style={s.tradeButtons}>
-          <Pressable
-            disabled={!canOffer}
-            onPress={() => setOpen('bank')}
-            style={btnStyle(canOffer, theme)}>
-            <Text style={[s.btnText, { color: canOffer ? '#fff' : theme.textSecondary }]}>
-              Bank
-            </Text>
-          </Pressable>
-          <Pressable
-            disabled={!canOffer}
-            onPress={() => setOpen('p2p')}
-            style={btnStyle(canOffer, theme)}>
-            <Text style={[s.btnText, { color: canOffer ? '#fff' : theme.textSecondary }]}>
-              Players
-            </Text>
-          </Pressable>
-        </View>
-        {state.trade.fromPlayer === myId && (
-          <View style={s.pendingTradeRow}>
-            <Text style={[s.tradeMini, { color: theme.textSecondary }]}>
-              You have an open offer
-            </Text>
+
+        {/* ── Active outgoing offer ── */}
+        {iMyOffer ? (
+          <View style={[s.pendingOfferCard, { backgroundColor: theme.background, borderColor: theme.primary }]}>
+            <View style={s.pendingOfferHeader}>
+              <Text style={[s.pendingOfferTitle, { color: theme.text }]}>Offer pending…</Text>
+              <Text style={[s.pendingOfferSub, { color: theme.textSecondary }]}>
+                {trade.toPlayer === NO_PLAYER
+                  ? 'Sent to all players'
+                  : `Sent to Player ${trade.toPlayer + 1}`}
+              </Text>
+            </View>
+            <TradeSummaryRow offer={trade.offer} want={trade.want} theme={theme} />
             <Pressable
               onPress={() => sendInput({ action: PlayerAction.TRADE_CANCEL })}
-              style={[s.smallBtn, { backgroundColor: theme.backgroundSelected }]}>
-              <Text style={[s.btnText, { color: theme.text }]}>Cancel</Text>
+              style={[s.btn, { backgroundColor: theme.backgroundSelected, marginTop: Spacing.two }]}>
+              <Text style={[s.btnText, { color: theme.text }]}>Cancel Offer</Text>
+            </Pressable>
+            <Text style={[s.tradeBlockHint, { color: theme.textSecondary }]}>
+              Resolve this trade before ending your turn.
+            </Text>
+          </View>
+        ) : (
+          /* ── Trade buttons ── */
+          <View style={s.tradeButtons}>
+            <Pressable
+              disabled={!canBankTrade}
+              onPress={() => setOpen('bank')}
+              style={btnStyle(canBankTrade, theme)}>
+              <Text style={[s.btnText, { color: canBankTrade ? '#fff' : theme.textSecondary }]}>
+                Bank
+              </Text>
+            </Pressable>
+            <Pressable
+              disabled={!canOffer}
+              onPress={() => setOpen('p2p')}
+              style={btnStyle(canOffer, theme)}>
+              <Text style={[s.btnText, { color: canOffer ? '#fff' : theme.textSecondary }]}>
+                Players
+              </Text>
             </Pressable>
           </View>
         )}
@@ -655,42 +695,92 @@ export function IncomingTradeDialog({
   state, myId, sendInput, theme,
 }: CommonProps) {
   const t = state.trade;
-  if (t.fromPlayer === NO_PLAYER) return null;
-  if (t.fromPlayer === myId) return null;
-  // Only show to the targeted player (or to all opponents on an open offer).
-  if (t.toPlayer !== NO_PLAYER && t.toPlayer !== myId) return null;
+
+  // Visibility: there must be a live offer, not from myself, and directed at
+  // me specifically or broadcast to all opponents.
+  const visible =
+    t.fromPlayer !== NO_PLAYER &&
+    t.fromPlayer !== myId &&
+    (t.toPlayer === NO_PLAYER || t.toPlayer === myId);
 
   const my = playerResources(state, myId);
-  const canAcceptResources = t.want.every((w, i) => my[i] >= w);
+  const canAfford = t.want.every((w, i) => (my[i] ?? 0) >= w);
+
+  // Missing resources for the "want" side — shown when they can't afford.
+  const missing = RESOURCES.filter((_, i) => (t.want[i] ?? 0) > (my[i] ?? 0));
+
+  if (!visible) return null;
+
+  const isOpenOffer = t.toPlayer === NO_PLAYER;
 
   return (
     <Modal visible transparent animationType="fade">
       <View style={s.modalBg}>
         <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[s.modalTitle, { color: theme.text }]}>
-            Trade offer from P{t.fromPlayer + 1}
-          </Text>
-          <View style={s.tradeOfferRow}>
-            <Text style={[s.tradeMini, { color: theme.textSecondary }]}>Gives</Text>
-            <ResourceBadgeRow values={t.offer} theme={theme} />
+
+          {/* Header */}
+          <View style={s.tradeDialogHeader}>
+            <Text style={[s.modalTitle, { color: theme.text }]}>
+              Trade offer from Player {t.fromPlayer + 1}
+            </Text>
+            {isOpenOffer && (
+              <View style={[s.openOfferBadge, { backgroundColor: theme.backgroundSelected }]}>
+                <Text style={[s.openOfferBadgeText, { color: theme.textSecondary }]}>
+                  Open offer · first to accept wins
+                </Text>
+              </View>
+            )}
           </View>
-          <View style={s.tradeOfferRow}>
-            <Text style={[s.tradeMini, { color: theme.textSecondary }]}>Wants</Text>
-            <ResourceBadgeRow values={t.want} theme={theme} />
+
+          {/* They give */}
+          <View style={s.tradeDialogSection}>
+            <Text style={[s.tradeDialogLabel, { color: theme.textSecondary }]}>
+              They offer you
+            </Text>
+            <View style={[s.tradeDialogResBox, { backgroundColor: theme.background }]}>
+              <ResourceBadgeRow values={t.offer} theme={theme} />
+            </View>
           </View>
-          <View style={s.tradeButtons}>
-            <Pressable
-              disabled={!canAcceptResources}
-              onPress={() => sendInput({ action: PlayerAction.TRADE_ACCEPT })}
-              style={btnStyle(canAcceptResources, theme)}>
-              <Text style={[s.btnText, { color: canAcceptResources ? '#fff' : theme.textSecondary }]}>
-                Accept
+
+          {/* They want */}
+          <View style={s.tradeDialogSection}>
+            <Text style={[s.tradeDialogLabel, { color: theme.textSecondary }]}>
+              They want from you
+            </Text>
+            <View style={[s.tradeDialogResBox, { backgroundColor: theme.background }]}>
+              <ResourceBadgeRow
+                values={t.want}
+                highlight={t.want.map((w, i) => (my[i] ?? 0) < w ? 1 : 0)}
+                theme={theme}
+              />
+            </View>
+          </View>
+
+          {/* Can't-afford notice */}
+          {!canAfford && (
+            <View style={[s.tradeAffordRow, { backgroundColor: theme.background }]}>
+              <Text style={[s.tradeAffordText, { color: theme.textSecondary }]}>
+                You don't have enough{' '}
+                {missing.map(r => r.emoji).join(' ')}{' '}
+                to accept this trade.
               </Text>
-            </Pressable>
+            </View>
+          )}
+
+          {/* Actions */}
+          <View style={[s.tradeButtons, { marginTop: Spacing.two }]}>
             <Pressable
               onPress={() => sendInput({ action: PlayerAction.TRADE_DECLINE })}
-              style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+              style={[s.btn, { flex: 1, backgroundColor: theme.backgroundSelected }]}>
               <Text style={[s.btnText, { color: theme.text }]}>Decline</Text>
+            </Pressable>
+            <Pressable
+              disabled={!canAfford}
+              onPress={() => sendInput({ action: PlayerAction.TRADE_ACCEPT })}
+              style={[s.btn, { flex: 1, backgroundColor: canAfford ? theme.primary : theme.backgroundElement, opacity: canAfford ? 1 : 0.4 }]}>
+              <Text style={[s.btnText, { color: canAfford ? '#fff' : theme.textSecondary }]}>
+                Accept
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -700,6 +790,9 @@ export function IncomingTradeDialog({
 }
 
 // ── Trade composer ──────────────────────────────────────────────────────────
+
+// p2p compose flow has three named steps in order.
+type P2PStep = 'give' | 'want' | 'target';
 
 function TradeComposer({
   kind, state, myId, sendInput, onClose, theme,
@@ -713,13 +806,18 @@ function TradeComposer({
 }) {
   const [give, setGive] = useState<number[]>([0, 0, 0, 0, 0]);
   const [want, setWant] = useState<number[]>([0, 0, 0, 0, 0]);
-  const [target, setTarget] = useState<number>(NO_PLAYER);
+  // p2p target: a specific player index, or NO_PLAYER for "everyone".
+  // We use a sentinel null to mean "not yet chosen" so we can force the user
+  // to make an explicit selection.
+  const [target, setTarget] = useState<number | null>(null);
+  const [p2pStep, setP2PStep] = useState<P2PStep>('give');
 
   useEffect(() => {
     if (!kind) {
       setGive([0, 0, 0, 0, 0]);
       setWant([0, 0, 0, 0, 0]);
-      setTarget(NO_PLAYER);
+      setTarget(null);
+      setP2PStep('give');
     }
   }, [kind]);
 
@@ -728,21 +826,19 @@ function TradeComposer({
   const my = playerResources(state, myId);
   const rates = kind === 'bank' ? bankTradeRates(state, myId) : [1, 1, 1, 1, 1];
 
-  // Bank: each give[r] must be a multiple of rates[r]; credits = sum(give[r]/rates[r])
-  // and want_total must equal credits.
-  const credits    = give.reduce((acc, g, r) => acc + Math.floor(g / rates[r]), 0);
-  const wantTotal  = want.reduce((a, b) => a + b, 0);
-  const giveTotal  = give.reduce((a, b) => a + b, 0);
+  const credits   = give.reduce((acc, g, r) => acc + Math.floor(g / rates[r]), 0);
+  const wantTotal = want.reduce((a, b) => a + b, 0);
+  const giveTotal = give.reduce((a, b) => a + b, 0);
 
-  const canSubmit =
-    kind === 'bank'
-      ? credits > 0 &&
-        wantTotal === credits &&
-        give.every((g, r) => g === 0 || g % rates[r] === 0) &&
-        give.every((g, i) => my[i] >= g)
-      : giveTotal > 0 &&
-        wantTotal > 0 &&
-        give.every((g, i) => my[i] >= g);
+  const giveValid = kind === 'bank'
+    ? credits > 0 && give.every((g, r) => g === 0 || g % rates[r] === 0) && give.every((g, i) => my[i] >= g)
+    : giveTotal > 0 && give.every((g, i) => my[i] >= g);
+
+  const wantValid = kind === 'bank'
+    ? wantTotal === credits
+    : wantTotal > 0;
+
+  const canSubmitBank = giveValid && wantValid;
 
   const adjustGive = (i: number, dir: 1 | -1) => {
     setGive(prev => {
@@ -773,133 +869,293 @@ function TradeComposer({
     });
   };
 
-  const submit = () => {
-    if (kind === 'bank') {
-      sendInput({
-        action: PlayerAction.BANK_TRADE,
-        resLumber: give[0], resWool: give[1], resGrain: give[2], resBrick: give[3], resOre: give[4],
-        wantLumber: want[0], wantWool: want[1], wantGrain: want[2], wantBrick: want[3], wantOre: want[4],
-      });
-    } else {
-      sendInput({
-        action: PlayerAction.TRADE_OFFER,
-        targetPlayer: target,
-        resLumber: give[0], resWool: give[1], resGrain: give[2], resBrick: give[3], resOre: give[4],
-        wantLumber: want[0], wantWool: want[1], wantGrain: want[2], wantBrick: want[3], wantOre: want[4],
-      });
-    }
+  const adjustP2pWant = (i: number, dir: 1 | -1) => {
+    setWant(prev => {
+      const next = prev.slice();
+      next[i] = Math.max(0, prev[i] + dir);
+      return next;
+    });
+  };
+
+  const submitBank = () => {
+    sendInput({
+      action: PlayerAction.BANK_TRADE,
+      resLumber: give[0], resWool: give[1], resGrain: give[2], resBrick: give[3], resOre: give[4],
+      wantLumber: want[0], wantWool: want[1], wantGrain: want[2], wantBrick: want[3], wantOre: want[4],
+    });
     onClose();
   };
+
+  const submitP2P = () => {
+    sendInput({
+      action: PlayerAction.TRADE_OFFER,
+      targetPlayer: target ?? NO_PLAYER,
+      resLumber: give[0], resWool: give[1], resGrain: give[2], resBrick: give[3], resOre: give[4],
+      wantLumber: want[0], wantWool: want[1], wantGrain: want[2], wantBrick: want[3], wantOre: want[4],
+    });
+    onClose();
+  };
+
+  // ── Bank trade layout ────────────────────────────────────────────────────
+  if (kind === 'bank') {
+    return (
+      <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+        <View style={s.modalBg}>
+          <ScrollView
+            style={{ width: '100%' }}
+            contentContainerStyle={s.modalScrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}>
+            <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
+              <Text style={[s.modalTitle, { color: theme.text }]}>Trade with bank</Text>
+              <ResourceBadgeRow values={my} theme={theme} />
+
+              <Text style={[s.tradeMini, { color: theme.textSecondary }]}>
+                You give (rate shown per resource)
+              </Text>
+              {RESOURCES.map((r, i) => {
+                const rate = rates[i];
+                const maxGive = Math.floor(my[i] / rate) * rate;
+                return (
+                  <View key={`g-${r.key}`} style={s.discardRow}>
+                    <Text style={s.discardEmoji}>{r.emoji}</Text>
+                    <Text style={[s.discardHave, { color: theme.textSecondary }]}>{rate}:1</Text>
+                    <Pressable disabled={give[i] === 0} onPress={() => adjustGive(i, -1)}
+                      style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                      <Text style={[s.btnText, { color: theme.text }]}>−</Text>
+                    </Pressable>
+                    <Text style={[s.discardCount, { color: theme.text }]}>{give[i]}</Text>
+                    <Pressable disabled={give[i] >= maxGive} onPress={() => adjustGive(i, 1)}
+                      style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                      <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
+                    </Pressable>
+                  </View>
+                );
+              })}
+
+              <Text style={[s.tradeMini, { color: credits > 0 ? theme.primary : theme.textSecondary, marginTop: Spacing.one }]}>
+                Credits earned: {credits}
+              </Text>
+
+              <Text style={[s.tradeMini, { color: theme.textSecondary, marginTop: Spacing.two }]}>
+                You receive (pick {credits})
+              </Text>
+              {RESOURCES.map((r, i) => (
+                <View key={`w-${r.key}`} style={s.discardRow}>
+                  <Text style={s.discardEmoji}>{r.emoji}</Text>
+                  <Pressable disabled={want[i] === 0} onPress={() => adjustWant(i, -1)}
+                    style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                    <Text style={[s.btnText, { color: theme.text }]}>−</Text>
+                  </Pressable>
+                  <Text style={[s.discardCount, { color: theme.text }]}>{want[i]}</Text>
+                  <Pressable disabled={wantTotal >= credits} onPress={() => adjustWant(i, 1)}
+                    style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                    <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
+                  </Pressable>
+                </View>
+              ))}
+
+              <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
+                <Pressable onPress={onClose} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                  <Text style={[s.btnText, { color: theme.text }]}>Cancel</Text>
+                </Pressable>
+                <Pressable disabled={!canSubmitBank} onPress={submitBank} style={btnStyle(canSubmitBank, theme)}>
+                  <Text style={[s.btnText, { color: canSubmitBank ? '#fff' : theme.textSecondary }]}>Trade</Text>
+                </Pressable>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+    );
+  }
+
+  // ── Player-to-player trade — stepped layout ──────────────────────────────
+  const otherPlayers = [0, 1, 2, 3].filter(i => i !== myId && i < state.numPlayers);
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={s.modalBg}>
-        <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[s.modalTitle, { color: theme.text }]}>
-            {kind === 'bank' ? 'Trade with bank' : 'Trade with players'}
-          </Text>
-          {kind === 'bank' && <ResourceBadgeRow values={my} theme={theme} />}
+        <ScrollView
+          style={{ width: '100%' }}
+          contentContainerStyle={s.modalScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
+          <View style={[s.modalCard, { backgroundColor: theme.backgroundElement }]}>
 
-          {/* ── Give ── */}
-          <Text style={[s.tradeMini, { color: theme.textSecondary }]}>
-            {kind === 'bank' ? 'You give (tap +/− to step by rate)' : 'You give'}
-          </Text>
-          {RESOURCES.map((r, i) => {
-            const rate = rates[i];
-            const maxGive = kind === 'bank' ? Math.floor(my[i] / rate) * rate : my[i];
-            return (
-              <View key={`g-${r.key}`} style={s.discardRow}>
-                <Text style={s.discardEmoji}>{r.emoji}</Text>
-                <Text style={[s.discardHave, { color: theme.textSecondary }]}>
-                  {kind === 'bank' ? `${rate}:1` : `have ${my[i]}`}
-                </Text>
-                <Pressable
-                  disabled={give[i] === 0}
-                  onPress={() => kind === 'bank' ? adjustGive(i, -1) : adjustP2pGive(i, -1)}
-                  style={[s.smallBtn, { backgroundColor: theme.background }]}>
-                  <Text style={[s.btnText, { color: theme.text }]}>−</Text>
-                </Pressable>
-                <Text style={[s.discardCount, { color: theme.text }]}>{give[i]}</Text>
-                <Pressable
-                  disabled={give[i] >= maxGive}
-                  onPress={() => kind === 'bank' ? adjustGive(i, 1) : adjustP2pGive(i, 1)}
-                  style={[s.smallBtn, { backgroundColor: theme.background }]}>
-                  <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
-                </Pressable>
-              </View>
-            );
-          })}
-
-          {/* ── Credits earned (bank only) ── */}
-          {kind === 'bank' && (
-            <Text style={[s.tradeMini, { color: credits > 0 ? theme.primary : theme.textSecondary, marginTop: Spacing.one }]}>
-              Credits earned: {credits}
-            </Text>
-          )}
-
-          {/* ── Want ── */}
-          <Text style={[s.tradeMini, { color: theme.textSecondary, marginTop: Spacing.two }]}>
-            {kind === 'bank' ? `You receive (pick ${credits})` : 'You want'}
-          </Text>
-          {RESOURCES.map((r, i) => (
-            <View key={`w-${r.key}`} style={s.discardRow}>
-              <Text style={s.discardEmoji}>{r.emoji}</Text>
-              <Pressable
-                disabled={want[i] === 0}
-                onPress={() => adjustWant(i, -1)}
-                style={[s.smallBtn, { backgroundColor: theme.background }]}>
-                <Text style={[s.btnText, { color: theme.text }]}>−</Text>
-              </Pressable>
-              <Text style={[s.discardCount, { color: theme.text }]}>{want[i]}</Text>
-              <Pressable
-                disabled={kind === 'bank' && wantTotal >= credits}
-                onPress={() => adjustWant(i, 1)}
-                style={[s.smallBtn, { backgroundColor: theme.background }]}>
-                <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
-              </Pressable>
+            {/* ── Step indicator ── */}
+            <View style={s.stepIndicator}>
+              {(['give', 'want', 'target'] as P2PStep[]).map((step, idx) => {
+                const active = p2pStep === step;
+                const done =
+                  (step === 'give' && giveTotal > 0 && p2pStep !== 'give') ||
+                  (step === 'want' && wantTotal > 0 && p2pStep === 'target');
+                return (
+                  <React.Fragment key={step}>
+                    {idx > 0 && (
+                      <View style={[s.stepDivider, { backgroundColor: done ? theme.primary : theme.backgroundSelected }]} />
+                    )}
+                    <Pressable
+                      onPress={() => {
+                        if (step === 'want' && giveTotal === 0) return;
+                        if (step === 'target' && (giveTotal === 0 || wantTotal === 0)) return;
+                        setP2PStep(step);
+                      }}
+                      style={[
+                        s.stepDot,
+                        {
+                          backgroundColor: active ? theme.primary : done ? theme.primary : theme.backgroundSelected,
+                          opacity: active ? 1 : 0.6,
+                        },
+                      ]}>
+                      <Text style={[s.stepDotText, { color: active || done ? '#fff' : theme.textSecondary }]}>
+                        {idx + 1}
+                      </Text>
+                    </Pressable>
+                  </React.Fragment>
+                );
+              })}
             </View>
-          ))}
 
-          {/* ── p2p target picker ── */}
-          {kind === 'p2p' && (
-            <View style={[s.tradeButtons, { marginTop: Spacing.two }]}>
-              {[0, 1, 2, 3].filter(i => i !== myId && i < state.numPlayers).map(i => (
-                <Pressable
-                  key={i}
-                  onPress={() => setTarget(i)}
-                  style={[
-                    s.smallBtn,
-                    { backgroundColor: target === i ? theme.primary : theme.background },
-                  ]}>
-                  <Text style={[s.btnText, { color: target === i ? '#fff' : theme.text }]}>
-                    P{i + 1}
+            {/* ── Step 1: Give ── */}
+            {p2pStep === 'give' && (
+              <>
+                <Text style={[s.modalTitle, { color: theme.text }]}>What will you offer?</Text>
+                <Text style={[s.modalBody, { color: theme.textSecondary }]}>
+                  Select at least 1 resource you will give.
+                </Text>
+                {RESOURCES.map((r, i) => (
+                  <View key={`g-${r.key}`} style={s.discardRow}>
+                    <Text style={s.discardEmoji}>{r.emoji}</Text>
+                    <Text style={[s.discardLabel, { color: theme.text }]}>{r.label}</Text>
+                    <Text style={[s.discardHave, { color: theme.textSecondary }]}>have {my[i]}</Text>
+                    <Pressable disabled={give[i] === 0} onPress={() => adjustP2pGive(i, -1)}
+                      style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                      <Text style={[s.btnText, { color: theme.text }]}>−</Text>
+                    </Pressable>
+                    <Text style={[s.discardCount, { color: theme.text }]}>{give[i]}</Text>
+                    <Pressable disabled={give[i] >= my[i]} onPress={() => adjustP2pGive(i, 1)}
+                      style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                      <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
+                    </Pressable>
+                  </View>
+                ))}
+                <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
+                  <Pressable onPress={onClose} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                    <Text style={[s.btnText, { color: theme.text }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={giveTotal === 0}
+                    onPress={() => setP2PStep('want')}
+                    style={btnStyle(giveTotal > 0, theme)}>
+                    <Text style={[s.btnText, { color: giveTotal > 0 ? '#fff' : theme.textSecondary }]}>
+                      Next →
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {/* ── Step 2: Want ── */}
+            {p2pStep === 'want' && (
+              <>
+                <Text style={[s.modalTitle, { color: theme.text }]}>What do you want?</Text>
+                <Text style={[s.modalBody, { color: theme.textSecondary }]}>
+                  Select at least 1 resource you want in return.
+                </Text>
+                {/* Compact offer summary */}
+                <View style={[s.tradeOfferRow, { backgroundColor: theme.background, borderRadius: 10, padding: Spacing.two }]}>
+                  <Text style={[s.tradeMini, { color: theme.textSecondary }]}>You're offering: </Text>
+                  <TradeSummaryRow offer={give} want={[0,0,0,0,0]} theme={theme} />
+                </View>
+                {RESOURCES.map((r, i) => (
+                  <View key={`w-${r.key}`} style={s.discardRow}>
+                    <Text style={s.discardEmoji}>{r.emoji}</Text>
+                    <Text style={[s.discardLabel, { color: theme.text }]}>{r.label}</Text>
+                    <Pressable disabled={want[i] === 0} onPress={() => adjustP2pWant(i, -1)}
+                      style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                      <Text style={[s.btnText, { color: theme.text }]}>−</Text>
+                    </Pressable>
+                    <Text style={[s.discardCount, { color: theme.text }]}>{want[i]}</Text>
+                    <Pressable onPress={() => adjustP2pWant(i, 1)}
+                      style={[s.smallBtn, { backgroundColor: theme.background }]}>
+                      <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
+                    </Pressable>
+                  </View>
+                ))}
+                <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
+                  <Pressable onPress={() => setP2PStep('give')} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                    <Text style={[s.btnText, { color: theme.text }]}>← Back</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={wantTotal === 0}
+                    onPress={() => setP2PStep('target')}
+                    style={btnStyle(wantTotal > 0, theme)}>
+                    <Text style={[s.btnText, { color: wantTotal > 0 ? '#fff' : theme.textSecondary }]}>
+                      Next →
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {/* ── Step 3: Target ── */}
+            {p2pStep === 'target' && (
+              <>
+                <Text style={[s.modalTitle, { color: theme.text }]}>Who do you want to trade with?</Text>
+                {/* Trade summary */}
+                <View style={[s.tradeOfferRow, { backgroundColor: theme.background, borderRadius: 10, padding: Spacing.two }]}>
+                  <TradeSummaryRow offer={give} want={want} theme={theme} />
+                </View>
+                {/* Target selection */}
+                <View style={s.targetRow}>
+                  {otherPlayers.map(i => (
+                    <Pressable
+                      key={i}
+                      onPress={() => setTarget(i)}
+                      style={[
+                        s.targetBtn,
+                        { backgroundColor: target === i ? theme.primary : theme.backgroundSelected },
+                      ]}>
+                      <Text style={[s.targetBtnLabel, { color: target === i ? '#fff' : theme.text }]}>
+                        P{i + 1}
+                      </Text>
+                    </Pressable>
+                  ))}
+                  {/* "Everyone" broadcasts to all other connected players */}
+                  <Pressable
+                    onPress={() => setTarget(NO_PLAYER)}
+                    style={[
+                      s.targetBtn,
+                      { backgroundColor: target === NO_PLAYER ? theme.primary : theme.backgroundSelected },
+                    ]}>
+                    <Text style={[s.targetBtnLabel, { color: target === NO_PLAYER ? '#fff' : theme.text }]}>
+                      Everyone
+                    </Text>
+                  </Pressable>
+                </View>
+                {target === NO_PLAYER && (
+                  <Text style={[s.tradeBlockHint, { color: theme.textSecondary }]}>
+                    Open offer — any opponent can accept. First to accept wins.
                   </Text>
-                </Pressable>
-              ))}
-              <Pressable
-                onPress={() => setTarget(NO_PLAYER)}
-                style={[
-                  s.smallBtn,
-                  { backgroundColor: target === NO_PLAYER ? theme.primary : theme.background },
-                ]}>
-                <Text style={[s.btnText, { color: target === NO_PLAYER ? '#fff' : theme.text }]}>
-                  Open
-                </Text>
-              </Pressable>
-            </View>
-          )}
-
-          <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
-            <Pressable onPress={onClose} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
-              <Text style={[s.btnText, { color: theme.text }]}>Cancel</Text>
-            </Pressable>
-            <Pressable disabled={!canSubmit} onPress={submit} style={btnStyle(canSubmit, theme)}>
-              <Text style={[s.btnText, { color: canSubmit ? '#fff' : theme.textSecondary }]}>
-                {kind === 'bank' ? 'Trade' : 'Send Offer'}
-              </Text>
-            </Pressable>
+                )}
+                <View style={[s.tradeButtons, { marginTop: Spacing.three }]}>
+                  <Pressable onPress={() => setP2PStep('want')} style={[s.btn, { backgroundColor: theme.backgroundSelected }]}>
+                    <Text style={[s.btnText, { color: theme.text }]}>← Back</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={target === null}
+                    onPress={submitP2P}
+                    style={btnStyle(target !== null, theme)}>
+                    <Text style={[s.btnText, { color: target !== null ? '#fff' : theme.textSecondary }]}>
+                      Send Offer
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
           </View>
-        </View>
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -1163,6 +1419,54 @@ const s = StyleSheet.create({
   pendingTradeRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: Spacing.two,
+  },
+
+  // Pending offer card (shown when offerer is waiting for a response)
+  pendingOfferCard: {
+    borderRadius: 12, borderWidth: 1, padding: Spacing.three,
+    gap: Spacing.two, marginTop: Spacing.two,
+  },
+  pendingOfferHeader: { gap: 2 },
+  pendingOfferTitle:  { fontSize: 14, fontWeight: '800' },
+  pendingOfferSub:    { fontSize: 12, fontWeight: '500' },
+  tradeBlockHint: { fontSize: 11, fontStyle: 'italic', textAlign: 'center' },
+
+  // Trade summary (compact give → want row)
+  tradeSummaryRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, flexWrap: 'wrap' },
+  tradeSummaryGroup: { flexDirection: 'row', gap: 4, flexWrap: 'wrap' },
+  tradeSummaryChip:  { fontSize: 13, fontWeight: '700' },
+  tradeSummaryArrow: { fontSize: 14, fontWeight: '700' },
+
+  // Incoming trade dialog
+  tradeDialogHeader:  { gap: Spacing.one },
+  tradeDialogSection: { gap: Spacing.one },
+  tradeDialogLabel:   { fontSize: 12, fontWeight: '600' },
+  tradeDialogResBox:  { borderRadius: 10, padding: Spacing.two },
+  openOfferBadge: {
+    alignSelf: 'flex-start', paddingHorizontal: Spacing.two, paddingVertical: 3, borderRadius: 6,
+  },
+  openOfferBadgeText: { fontSize: 11, fontWeight: '600' },
+  tradeAffordRow: {
+    borderRadius: 10, padding: Spacing.two,
+  },
+  tradeAffordText: { fontSize: 12, fontWeight: '500' },
+
+  // Step indicator for p2p composer
+  stepIndicator: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 0, marginBottom: Spacing.two,
+  },
+  stepDot: {
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  stepDotText:  { fontSize: 12, fontWeight: '800' },
+  stepDivider:  { height: 2, flex: 1, marginHorizontal: 4 },
+
+  // Scrollable modal content wrapper
+  modalScrollContent: {
+    flexGrow: 1, justifyContent: 'center', alignItems: 'center',
+    padding: Spacing.four,
   },
 
   // Resource picker

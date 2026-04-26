@@ -16,7 +16,7 @@ import { useBle } from '@/context/ble-context';
 import { Spacing } from '@/constants/theme';
 import { PHASE_LABEL, buttonsForPhase } from '@/constants/game';
 import { useTheme } from '@/hooks/use-theme';
-import { GamePhase, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES, DevCard, DEV_CARD_COUNT, Difficulty } from '@/services/proto';
+import { GamePhase, NO_PLAYER, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES, DevCard, DEV_CARD_COUNT, Difficulty } from '@/services/proto';
 import { SFSymbolIcon } from '@/components/ui/symbol';
 import { BoardOverview } from '@/components/ui/board-overview';
 import { PlacementToast } from '@/components/game/placement-toast';
@@ -196,7 +196,13 @@ export default function GameScreen() {
     phase === GamePhase.DISCARD ||
     phase === GamePhase.GAME_OVER;
 
-  const buttons = buttonsForPhase(phase, myTurn, hasRolled, connectedCount);
+  const buttons = buttonsForPhase(
+    phase,
+    myTurn,
+    hasRolled,
+    connectedCount,
+    (gameState?.trade?.fromPlayer ?? NO_PLAYER) !== NO_PLAYER,
+  );
   const boardAvailable = (gameState?.tiles?.length ?? 0) > 0;
 
   const sendInputTyped = useCallback(

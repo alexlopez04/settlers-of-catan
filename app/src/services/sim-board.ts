@@ -294,6 +294,80 @@ export function applySimulatedAction(
             s.bankSupply = s.bankSupply.map((b, i) => b - want[i]);
           }
         }
+      } else if (action === PlayerAction.TRADE_OFFER) {
+        const offer = [
+          input.resLumber ?? 0,
+          input.resWool   ?? 0,
+          input.resGrain  ?? 0,
+          input.resBrick  ?? 0,
+          input.resOre    ?? 0,
+        ];
+        const want = [
+          input.wantLumber ?? 0,
+          input.wantWool   ?? 0,
+          input.wantGrain  ?? 0,
+          input.wantBrick  ?? 0,
+          input.wantOre    ?? 0,
+        ];
+        const offerTotal = offer.reduce((a, b) => a + b, 0);
+        const wantTotal  = want.reduce((a, b) => a + b, 0);
+        if (offerTotal > 0 && wantTotal > 0) {
+          s.trade = {
+            fromPlayer: p,
+            toPlayer:   input.targetPlayer ?? NO_PLAYER,
+            offer,
+            want,
+          };
+        }
+      } else if (action === PlayerAction.TRADE_CANCEL) {
+        if (s.trade.fromPlayer === p) {
+          s.trade = { fromPlayer: NO_PLAYER, toPlayer: NO_PLAYER, offer: [0,0,0,0,0], want: [0,0,0,0,0] };
+        }
+      } else if (action === PlayerAction.TRADE_ACCEPT) {
+        // Acceptor is `p`; check they can afford it and it's directed at them.
+        const t = s.trade;
+        if (
+          t.fromPlayer !== NO_PLAYER &&
+          t.fromPlayer !== p &&
+          (t.toPlayer === NO_PLAYER || t.toPlayer === p)
+        ) {
+          const acceptorHas = [
+            s.resLumber[p] ?? 0,
+            s.resWool[p]   ?? 0,
+            s.resGrain[p]  ?? 0,
+            s.resBrick[p]  ?? 0,
+            s.resOre[p]    ?? 0,
+          ];
+          const canAfford = t.want.every((w, i) => acceptorHas[i] >= w);
+          if (canAfford) {
+            const from = t.fromPlayer;
+            // Transfer: acceptor gives want to from-player; from-player gives offer to acceptor.
+            s.resLumber = add(add(s.resLumber, p, -t.want[0]), from, t.want[0]);
+            s.resWool   = add(add(s.resWool,   p, -t.want[1]), from, t.want[1]);
+            s.resGrain  = add(add(s.resGrain,  p, -t.want[2]), from, t.want[2]);
+            s.resBrick  = add(add(s.resBrick,  p, -t.want[3]), from, t.want[3]);
+            s.resOre    = add(add(s.resOre,    p, -t.want[4]), from, t.want[4]);
+            s.resLumber = add(add(s.resLumber, from, -t.offer[0]), p, t.offer[0]);
+            s.resWool   = add(add(s.resWool,   from, -t.offer[1]), p, t.offer[1]);
+            s.resGrain  = add(add(s.resGrain,  from, -t.offer[2]), p, t.offer[2]);
+            s.resBrick  = add(add(s.resBrick,  from, -t.offer[3]), p, t.offer[3]);
+            s.resOre    = add(add(s.resOre,    from, -t.offer[4]), p, t.offer[4]);
+            s.trade = { fromPlayer: NO_PLAYER, toPlayer: NO_PLAYER, offer: [0,0,0,0,0], want: [0,0,0,0,0] };
+          }
+        }
+      } else if (action === PlayerAction.TRADE_DECLINE) {
+        const t = s.trade;
+        if (
+          t.fromPlayer !== NO_PLAYER &&
+          t.fromPlayer !== p &&
+          (t.toPlayer === NO_PLAYER || t.toPlayer === p)
+        ) {
+          // For a targeted trade, declining closes the offer.
+          if (t.toPlayer !== NO_PLAYER) {
+            s.trade = { fromPlayer: NO_PLAYER, toPlayer: NO_PLAYER, offer: [0,0,0,0,0], want: [0,0,0,0,0] };
+          }
+          // For an open offer, one decline doesn't close it — others can still accept.
+        }
       }
       break;
 
