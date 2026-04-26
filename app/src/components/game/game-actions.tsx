@@ -6,8 +6,9 @@
 // BoardState values read-only; no local mirroring of VP or resources.
 // =============================================================================
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   Modal,
   Pressable,
   ScrollView,
@@ -22,7 +23,7 @@ import { BoardMap } from '@/components/ui/board-map';
 import type { useTheme } from '@/hooks/use-theme';
 
 import { Spacing } from '@/constants/theme';
-import { DEV_CARD_COST, CITY_COST, ROAD_COST, RESOURCES, SETTLEMENT_COST } from '@/constants/game';
+import { DEV_CARD_COST, CITY_COST, DIE_FACES, ROAD_COST, RESOURCES, SETTLEMENT_COST } from '@/constants/game';
 import { PORTS, PortType } from '@/constants/board-topology';
 import {
   BoardState,
@@ -598,7 +599,7 @@ function TradeSummaryRow({ offer, want, theme }: { offer: number[]; want: number
     <View style={s.tradeSummaryRow}>
       <View style={s.tradeSummaryGroup}>
         {giveItems.map((r, idx) => (
-          <Text key={r.key} style={s.tradeSummaryChip}>
+          <Text key={r.key} style={[s.tradeSummaryChip, { color: theme.text }]}>
             {r.emoji}×{offer[RESOURCES.indexOf(r)]}
           </Text>
         ))}
@@ -606,7 +607,7 @@ function TradeSummaryRow({ offer, want, theme }: { offer: number[]; want: number
       <Text style={[s.tradeSummaryArrow, { color: theme.textSecondary }]}>→</Text>
       <View style={s.tradeSummaryGroup}>
         {wantItems.map(r => (
-          <Text key={r.key} style={s.tradeSummaryChip}>
+          <Text key={r.key} style={[s.tradeSummaryChip, { color: theme.text }]}>
             {r.emoji}×{want[RESOURCES.indexOf(r)]}
           </Text>
         ))}
@@ -1253,6 +1254,132 @@ function MonopolyModal({
   );
 }
 
+// ── Dice roll popup ─────────────────────────────────────────────────────────
+
+export function DiceRollPopup({
+  visible,
+  die1,
+  die2,
+  onDismiss,
+  theme,
+}: {
+  visible: boolean;
+  die1: number;
+  die2: number;
+  onDismiss: () => void;
+  theme: Theme;
+}) {
+  const [face1, setFace1] = useState(1);
+  const [face2, setFace2] = useState(1);
+  const [revealed, setRevealed] = useState(false);
+  const revealScale = useRef(new Animated.Value(0.4)).current;
+  const die1Scale   = useRef(new Animated.Value(1)).current;
+  const die2Scale   = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!visible) {
+      setFace1(1);
+      setFace2(1);
+      setRevealed(false);
+      revealScale.setValue(0.4);
+      die1Scale.setValue(1);
+      die2Scale.setValue(1);
+      return;
+    }
+
+    // Bounce the dice while spinning
+    const bounceAnim = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(die1Scale, { toValue: 0.82, duration: 45, useNativeDriver: true }),
+          Animated.timing(die2Scale, { toValue: 0.82, duration: 45, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(die1Scale, { toValue: 1.18, duration: 45, useNativeDriver: true }),
+          Animated.timing(die2Scale, { toValue: 1.18, duration: 45, useNativeDriver: true }),
+        ]),
+      ]),
+    );
+    bounceAnim.start();
+
+    // Cycle random faces for ~280 ms (7 frames × 40 ms)
+    const FRAMES = 7;
+    let count = 0;
+    const spinInterval = setInterval(() => {
+      count++;
+      setFace1(Math.floor(Math.random() * 6) + 1);
+      setFace2(Math.floor(Math.random() * 6) + 1);
+      if (count >= FRAMES) {
+        clearInterval(spinInterval);
+        bounceAnim.stop();
+
+        // Snap to final values
+        setFace1(die1);
+        setFace2(die2);
+        setRevealed(true);
+
+        // Land thump on each die
+        Animated.sequence([
+          Animated.timing(die1Scale, { toValue: 1.35, duration: 70, useNativeDriver: true }),
+          Animated.timing(die1Scale, { toValue: 1.0,  duration: 110, useNativeDriver: true }),
+        ]).start();
+        Animated.sequence([
+          Animated.timing(die2Scale, { toValue: 1.35, duration: 70, useNativeDriver: true }),
+          Animated.timing(die2Scale, { toValue: 1.0,  duration: 110, useNativeDriver: true }),
+        ]).start();
+
+        // Total badge springs in
+        Animated.spring(revealScale, {
+          toValue: 1,
+          friction: 4,
+          tension: 280,
+          useNativeDriver: true,
+        }).start();
+      }
+    }, 40);
+
+    // Auto-dismiss after 1.8 s
+    const dismissTimer = setTimeout(onDismiss, 1800);
+
+    return () => {
+      clearInterval(spinInterval);
+      clearTimeout(dismissTimer);
+      bounceAnim.stop();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+      <Pressable style={s.diceModalBg} onPress={onDismiss}>
+        <View style={[s.dicePopupCard, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[s.dicePopupTitle, { color: theme.textSecondary }]}>
+            {revealed ? 'Rolled!' : 'Rolling…'}
+          </Text>
+          <View style={s.dicePopupFaceRow}>
+            <Animated.Text style={[s.dicePopupFace, { color: theme.text, transform: [{ scale: die1Scale }] }]}>
+              {DIE_FACES[face1]}
+            </Animated.Text>
+            <Animated.Text style={[s.dicePopupFace, { color: theme.text, transform: [{ scale: die2Scale }] }]}>
+              {DIE_FACES[face2]}
+            </Animated.Text>
+          </View>
+          <Animated.View
+            style={[
+              s.dicePopupTotal,
+              { backgroundColor: theme.primary, transform: [{ scale: revealScale }] },
+            ]}>
+            <Text style={s.dicePopupTotalText}>{die1 + die2}</Text>
+          </Animated.View>
+          <Text style={[s.dicePopupHint, { color: theme.textSecondary }]}>Tap to dismiss</Text>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
+
 // ── Scoreboard ──────────────────────────────────────────────────────────────
 
 export function Scoreboard({ state, myId, theme }: CommonProps) {
@@ -1502,4 +1629,24 @@ const s = StyleSheet.create({
   scoreBadges: { flexDirection: 'row', gap: Spacing.two, flex: 1, justifyContent: 'flex-end' },
   miniBadge:   { fontSize: 11, fontWeight: '700' },
   scoreVp:     { fontSize: 20, fontWeight: '900', marginLeft: Spacing.two, minWidth: 28, textAlign: 'right' },
+
+  // Dice roll popup
+  diceModalBg: {
+    flex: 1, justifyContent: 'center', alignItems: 'center',
+    backgroundColor: '#000a',
+  },
+  dicePopupCard: {
+    borderRadius: 24, paddingHorizontal: Spacing.five, paddingVertical: Spacing.four,
+    alignItems: 'center', gap: Spacing.three, minWidth: 220,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10,
+  },
+  dicePopupTitle: { fontSize: 14, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
+  dicePopupFaceRow: { flexDirection: 'row', gap: Spacing.four },
+  dicePopupFace:   { fontSize: 72, lineHeight: 84 },
+  dicePopupTotal: {
+    width: 80, height: 80, borderRadius: 40,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  dicePopupTotalText: { fontSize: 40, fontWeight: '900', color: '#fff' },
+  dicePopupHint: { fontSize: 11, fontWeight: '500' },
 });

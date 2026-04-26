@@ -54,6 +54,7 @@ import {
   DistributionToast,
   Scoreboard,
   DrawnDevCardModal,
+  DiceRollPopup,
 } from '@/components/game/game-actions';
 
 // ── Player avatar text colours (must stay in sync with PLAYER_FILL in board-map) ──
@@ -218,7 +219,7 @@ function CompactPlayingStatus({
 
       {hasRolled && die1 > 0 && die2 > 0 ? (
         <View style={cs.diceRow}>
-          <Text style={cs.diceFaces}>{DIE_FACES[die1]}  {DIE_FACES[die2]}</Text>
+          <Text style={[cs.diceFaces, { color: theme.text }]}>{DIE_FACES[die1]}  {DIE_FACES[die2]}</Text>
           <View style={[cs.totalBadge, { backgroundColor: theme.primary }]}>
             <Text style={cs.totalText}>{die1 + die2}</Text>
           </View>
@@ -284,8 +285,10 @@ export default function GameScreen() {
   const [rejectMessage,     setRejectMessage]     = useState<string | null>(null);
   const [drawnCard,         setDrawnCard]         = useState<DevCard | null>(null);
   const [showBoardExpanded, setShowBoardExpanded] = useState(false);
+  const [showDicePopup,     setShowDicePopup]     = useState(false);
   const [turnStartCards,    setTurnStartCards]    = useState<number[] | null>(null);
-  const prevDevCardsRef = useRef<number[]>([]);
+  const prevDevCardsRef   = useRef<number[]>([]);
+  const prevHasRolledRef  = useRef(false);
 
   useEffect(() => {
     if (connectionState === 'idle') {
@@ -326,6 +329,15 @@ export default function GameScreen() {
   );
 
   const myId = playerId ?? 0;
+
+  // Show the dice popup whenever a new roll lands (for all players)
+  useEffect(() => {
+    const rolled = gameState?.hasRolled ?? false;
+    if (rolled && !prevHasRolledRef.current && (gameState?.die1 ?? 0) > 0) {
+      setShowDicePopup(true);
+    }
+    prevHasRolledRef.current = rolled;
+  }, [gameState?.hasRolled, gameState?.die1]);
 
   useEffect(() => {
     const reason = gameState?.lastRejectReason ?? RejectReason.NONE;
@@ -596,7 +608,7 @@ export default function GameScreen() {
       />
 
       {/* ── Full-screen overlays ─────────────────────────────────────── */}
-      {sharedProps && <RobberOverlay      {...sharedProps} />}
+      {sharedProps && !showDicePopup && <RobberOverlay {...sharedProps} />}
       {sharedProps && <StealOverlay       {...sharedProps} />}
       {sharedProps && <DiscardOverlay     {...sharedProps} />}
       {sharedProps && <IncomingTradeDialog {...sharedProps} />}
@@ -606,6 +618,13 @@ export default function GameScreen() {
         theme={theme}
       />
       <PlacementToast message={rejectMessage} onClose={() => setRejectMessage(null)} theme={theme} />
+      <DiceRollPopup
+        visible={showDicePopup}
+        die1={gameState?.die1 ?? 1}
+        die2={gameState?.die2 ?? 1}
+        onDismiss={() => setShowDicePopup(false)}
+        theme={theme}
+      />
     </View>
   );
 }
