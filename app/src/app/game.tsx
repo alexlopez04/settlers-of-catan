@@ -2,10 +2,14 @@ import { router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,12 +17,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 
 import { useBle } from '@/context/ble-context';
+import { useSettings } from '@/context/settings-context';
 import { Spacing } from '@/constants/theme';
-import { PHASE_LABEL, buttonsForPhase } from '@/constants/game';
+import { DIE_FACES, PHASE_LABEL, buttonsForPhase } from '@/constants/game';
 import { useTheme } from '@/hooks/use-theme';
-import { GamePhase, NO_PLAYER, PlayerAction, PlayerInput, RejectReason, REJECT_MESSAGES, DevCard, DEV_CARD_COUNT, Difficulty } from '@/services/proto';
+import {
+  GamePhase,
+  NO_PLAYER,
+  PlayerAction,
+  PlayerInput,
+  RejectReason,
+  REJECT_MESSAGES,
+  DevCard,
+  DEV_CARD_COUNT,
+  Difficulty,
+} from '@/services/proto';
+import type { BoardState } from '@/services/proto';
+import type { BoardRotation } from '@/utils/board-rotation';
 import { SFSymbolIcon } from '@/components/ui/symbol';
-import { BoardOverview } from '@/components/ui/board-overview';
+import { BoardMap, PLAYER_FILL } from '@/components/ui/board-map';
 import { PlacementToast } from '@/components/game/placement-toast';
 import { PhaseHero, FadeSlideIn } from '@/components/game/phase-hero';
 import { ActionBar } from '@/components/game/action-bar';
@@ -39,16 +56,220 @@ import {
   DrawnDevCardModal,
 } from '@/components/game/game-actions';
 
-// ── Module-level resume-dialog guard ────────────────────────────────────
-// Kept outside the component so it survives remounts that can occur during
-// BLE reconnection or navigation transitions.  Reset to false whenever the
-// session ends (connectionState → idle).
+// ── Player avatar text colours (must stay in sync with PLAYER_FILL in board-map) ──
+const PLAYER_TEXT_COLOR = ['#ffffff', '#ffffff', '#ffffff', '#1a1a1a'] as const;
+
+// ── Expanded board overlay ────────────────────────────────────────────────────
+// Rendered as an absolute-fill View (not a Modal) so that PlacementToast and
+// other overlays rendered later in the tree still appear on top.
+
+const ANIM_DURATION = 220;
+
+interface BoardExpandedOverlayProps {
+  visible: boolean;
+  onClose: () => void;
+  boardState: BoardState | null;
+  boardRotation: BoardRotation;
+  debug: { vertexOverlay: boolean; edgeOverlay: boolean };
+  theme: ReturnType<typeof useTheme>;
+}
+
+function BoardExpandedOverlay({
+  visible, onClose, boardState, boardRotation, debug, theme,
+}: BoardExpandedOverlayProps) {
+  const { width, height } = useWindowDimensions();
+  const scrollRef  = useRef<ScrollView>(null);
+  const opacity    = useRef(new Animated.Value(0)).current;
+  const scale      = useRef(new Animated.Value(0.96)).current;
+  const [mounted, setMounted] = useState(false);
+
+  const mapSize = Math.min(width, height * 0.82);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      // Enter: fade in + scale up
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 1, duration: ANIM_DURATION, useNativeDriver: true }),
+        Animated.timing(scale,   { toValue: 1, duration: ANIM_DURATION, useNativeDriver: true }),
+      ]).start();
+    } else {
+      // Exit: fade out + scale down, then unmount
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 0, duration: ANIM_DURATION, useNativeDriver: true }),
+        Animated.timing(scale,   { toValue: 0.96, duration: ANIM_DURATION, useNativeDriver: true }),
+      ]).start(({ finished }) => {
+        if (finished) setMounted(false);
+      });
+    }
+  }, [visible]);
+
+  const resetIfUnzoomed = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const s = e.nativeEvent.zoomScale ?? 1;
+    if (s <= 1.05) scrollRef.current?.scrollTo({ x: 0, y: 0, animated: false });
+  };
+
+  if (!mounted) return null;
+
+  return (
+    <Animated.View style={[em.overlay, { backgroundColor: theme.background, opacity, transform: [{ scale }] }]}>
+      <SafeAreaView style={em.safe} edges={['top', 'bottom', 'left', 'right']}>
+        {/* Header */}
+        <View style={[em.header, { borderBottomColor: theme.backgroundElement }]}>
+          <Text style={[em.title, { color: theme.text }]}>Board</Text>
+          <Pressable
+            onPress={onClose}
+            hitSlop={12}
+            style={em.closeBtn}
+            accessibilityLabel="Close board"
+            accessibilityRole="button">
+            <SFSymbolIcon name="xmark.circle.fill" size={28} color={theme.textSecondary} fallback="✕" />
+          </Pressable>
+        </View>
+
+        {/* Zoomable map centred in remaining space */}
+        <View style={em.mapArea}>
+          <ScrollView
+            ref={scrollRef}
+            style={{ width: mapSize, height: mapSize }}
+            contentContainerStyle={{ width: mapSize, height: mapSize }}
+            minimumZoomScale={1}
+            maximumZoomScale={3}
+            bouncesZoom
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+            centerContent
+            scrollsToTop={false}
+            onScrollEndDrag={resetIfUnzoomed}
+            onMomentumScrollEnd={resetIfUnzoomed}>
+            <BoardMap
+              tiles={boardState?.tiles ?? null}
+              vertices={boardState?.vertices}
+              edges={boardState?.edges}
+              robberTile={boardState?.robberTile}
+              rotation={boardRotation}
+              size={mapSize}
+              showPorts
+              showVertexIndices={debug.vertexOverlay}
+              showEdgeIndices={debug.edgeOverlay}
+            />
+          </ScrollView>
+          <Text style={[em.hint, { color: theme.textSecondary }]}>
+            Pinch to zoom · drag to pan
+          </Text>
+        </View>
+      </SafeAreaView>
+    </Animated.View>
+  );
+}
+
+const em = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+  },
+  safe:    { flex: 1 },
+  header: {
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'space-between',
+    paddingHorizontal: Spacing.four,
+    paddingVertical:   Spacing.three,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  title:    { fontSize: 20, fontWeight: '700' },
+  closeBtn: { padding: Spacing.one },
+  mapArea: {
+    flex:           1,
+    alignItems:     'center',
+    justifyContent: 'center',
+    gap:            Spacing.two,
+  },
+  hint: { fontSize: 11, fontWeight: '500' },
+});
+
+// ── Compact status row (PLAYING phase) ────────────────────────────────────────
+
+type Theme = ReturnType<typeof useTheme>;
+
+function CompactPlayingStatus({
+  myTurn, currentPlayer, hasRolled, die1, die2, theme,
+}: {
+  myTurn: boolean;
+  currentPlayer: number;
+  hasRolled: boolean;
+  die1: number;
+  die2: number;
+  theme: Theme;
+}) {
+  return (
+    <View style={[cs.row, { backgroundColor: theme.backgroundElement }]}>
+      <View style={[
+        cs.turnPill,
+        {
+          backgroundColor: myTurn ? theme.primary : 'transparent',
+          borderColor:      myTurn ? theme.primary : theme.textSecondary,
+        },
+      ]}>
+        <Text style={[cs.turnText, { color: myTurn ? '#fff' : theme.text }]}>
+          {myTurn ? 'Your turn' : `Player ${currentPlayer + 1}'s turn`}
+        </Text>
+      </View>
+
+      {hasRolled && die1 > 0 && die2 > 0 ? (
+        <View style={cs.diceRow}>
+          <Text style={cs.diceFaces}>{DIE_FACES[die1]}  {DIE_FACES[die2]}</Text>
+          <View style={[cs.totalBadge, { backgroundColor: theme.primary }]}>
+            <Text style={cs.totalText}>{die1 + die2}</Text>
+          </View>
+        </View>
+      ) : (
+        <Text style={[cs.rollHint, { color: theme.textSecondary }]}>
+          {myTurn ? 'Tap Roll Dice ↓' : 'Waiting for roll…'}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+const cs = StyleSheet.create({
+  row: {
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'space-between',
+    borderRadius:      14,
+    paddingHorizontal: Spacing.three,
+    paddingVertical:   Spacing.two,
+  },
+  turnPill: {
+    borderRadius:      20,
+    borderWidth:       1.5,
+    paddingHorizontal: Spacing.three,
+    paddingVertical:   6,
+  },
+  turnText:   { fontSize: 14, fontWeight: '700' },
+  diceRow:    { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  diceFaces:  { fontSize: 22, lineHeight: 28 },
+  totalBadge: {
+    borderRadius:      10,
+    paddingHorizontal: Spacing.two,
+    paddingVertical:   3,
+    minWidth:          32,
+    alignItems:        'center',
+  },
+  totalText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+  rollHint:  { fontSize: 13, fontWeight: '500' },
+});
+
+// ── Module-level resume-dialog guard ─────────────────────────────────────────
 let resumeAlertShown = false;
 
-// ── Main screen ───────────────────────────────────────────────────────────
+// ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function GameScreen() {
-  const theme = useTheme();
+  const theme                         = useTheme();
+  const { boardRotation, debug }      = useSettings();
+  const { width: screenWidth }        = useWindowDimensions();
   const {
     connectionState,
     connectedName,
@@ -59,17 +280,13 @@ export default function GameScreen() {
     disconnect,
   } = useBle();
 
-  const [pendingAction, setPendingAction] = useState<PlayerAction | null>(null);
-  const [showBoard, setShowBoard]         = useState(false);
-  const [rejectMessage, setRejectMessage] = useState<string | null>(null);
-  const [drawnCard, setDrawnCard]           = useState<DevCard | null>(null);
-  // Snapshot of my dev-card counts at the start of my current turn; null when not my turn.
-  const [turnStartCards, setTurnStartCards] = useState<number[] | null>(null);
-  const rejectTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevDevCardsRef    = useRef<number[]>([]);
+  const [pendingAction,     setPendingAction]     = useState<PlayerAction | null>(null);
+  const [rejectMessage,     setRejectMessage]     = useState<string | null>(null);
+  const [drawnCard,         setDrawnCard]         = useState<DevCard | null>(null);
+  const [showBoardExpanded, setShowBoardExpanded] = useState(false);
+  const [turnStartCards,    setTurnStartCards]    = useState<number[] | null>(null);
+  const prevDevCardsRef = useRef<number[]>([]);
 
-  // Navigate away when disconnected; also reset the module-level resume guard
-  // so a future session can show the dialog again.
   useEffect(() => {
     if (connectionState === 'idle') {
       resumeAlertShown = false;
@@ -77,44 +294,27 @@ export default function GameScreen() {
     }
   }, [connectionState]);
 
-  // Derive phase early so it can be used in hooks below.
   const phase = gameState?.phase ?? GamePhase.LOBBY;
 
-  // ── Resume-game dialog ──────────────────────────────────────────────────
-  // Only player 0 (slot 0) is prompted; others simply wait. Once the player
-  // answers, the board clears hasSavedGame and stops broadcasting it.
-  // resumeAlertShown is module-level so it survives component remounts that
-  // can occur during navigation transitions or brief BLE reconnections.
   useEffect(() => {
     if (
       !gameState?.hasSavedGame ||
       phase !== GamePhase.LOBBY ||
       playerId !== 0 ||
       resumeAlertShown
-    ) {
-      return;
-    }
+    ) return;
     resumeAlertShown = true;
     Alert.alert(
       'Resume Previous Game?',
       'A saved game was found from a previous session. Would you like to continue where you left off?',
       [
-        {
-          text: 'Start New Game',
-          style: 'destructive',
-          onPress: () => sendAction(PlayerAction.RESUME_NO),
-        },
-        {
-          text: 'Resume',
-          style: 'default',
-          onPress: () => sendAction(PlayerAction.RESUME_YES),
-        },
+        { text: 'Start New Game', style: 'destructive', onPress: () => sendAction(PlayerAction.RESUME_NO) },
+        { text: 'Resume',         style: 'default',     onPress: () => sendAction(PlayerAction.RESUME_YES) },
       ],
       { cancelable: false },
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameState?.hasSavedGame, phase, playerId]);
-
 
   const handleAction = useCallback(
     async (action: PlayerAction) => {
@@ -127,29 +327,19 @@ export default function GameScreen() {
 
   const myId = playerId ?? 0;
 
-  // Show a brief toast when the board rejects this player's action.
   useEffect(() => {
     const reason = gameState?.lastRejectReason ?? RejectReason.NONE;
     if (reason === RejectReason.NONE) return;
     if (gameState?.currentPlayer !== myId) return;
     const msg = REJECT_MESSAGES[reason] ?? 'Action rejected';
-    if (rejectTimerRef.current) clearTimeout(rejectTimerRef.current);
     setRejectMessage(msg);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    rejectTimerRef.current = setTimeout(() => setRejectMessage(null), 3000);
   }, [gameState?.lastRejectReason, gameState?.currentPlayer, myId]);
 
-  useEffect(() => () => {
-    if (rejectTimerRef.current) clearTimeout(rejectTimerRef.current);
-  }, []);
-
-  // Capture a snapshot of my dev-card counts at the very start of each of my turns.
-  // Clear it when my turn ends. This lets us derive which cards were bought THIS turn.
   useEffect(() => {
     if (!gameState) return;
     if (gameState.currentPlayer === myId) {
       setTurnStartCards(prev => {
-        // Only take the snapshot once — when my turn first begins.
         if (prev !== null) return prev;
         return gameState.devCards.slice(
           myId * DEV_CARD_COUNT,
@@ -161,7 +351,6 @@ export default function GameScreen() {
     }
   }, [gameState?.currentPlayer, gameState?.devCards, myId]);
 
-  // Detect a newly drawn dev card and show the popup.
   useEffect(() => {
     if (!gameState) return;
     const curr = gameState.devCards;
@@ -176,7 +365,6 @@ export default function GameScreen() {
     prevDevCardsRef.current = curr.slice();
   }, [gameState?.devCards, myId]);
 
-  // Derived: which of my cards were bought during this turn (play-locked).
   const boughtThisTurn = useMemo(() => {
     if (!gameState || !turnStartCards) return Array(DEV_CARD_COUNT).fill(0) as number[];
     return Array.from({ length: DEV_CARD_COUNT }, (_, d) => {
@@ -186,7 +374,7 @@ export default function GameScreen() {
     });
   }, [gameState, myId, turnStartCards]);
 
-  // ── Derived values ─────────────────────────────────────────────────────
+  // ── Derived values ──────────────────────────────────────────────────────
 
   const numPlayers    = gameState?.numPlayers ?? 0;
   const currentPlayer = gameState?.currentPlayer ?? 0;
@@ -218,7 +406,8 @@ export default function GameScreen() {
     [sendInput],
   );
 
-  const handleDisconnect = useCallback(() => {    const activePhases: GamePhase[] = [
+  const handleDisconnect = useCallback(() => {
+    const activePhases: GamePhase[] = [
       GamePhase.BOARD_SETUP,
       GamePhase.NUMBER_REVEAL,
       GamePhase.INITIAL_PLACEMENT,
@@ -248,73 +437,119 @@ export default function GameScreen() {
     theme,
   } : null, [gameState, myId, myTurn, sendInputTyped, theme]);
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  const isLobby         = phase === GamePhase.LOBBY;
+  const showBoardInline = boardAvailable && !isLobby;
+
+  // Inline map: fills the card (scroll horizontal padding is Spacing.four each side)
+  const inlineMapSize = screenWidth - Spacing.four * 2;
+
+  // ── Render ──────────────────────────────────────────────────────────────
 
   return (
     <View style={[s.root, { backgroundColor: theme.background }]}>
       <SafeAreaView style={s.safeArea} edges={['top', 'left', 'right']}>
 
-        <PlacementToast message={rejectMessage} theme={theme} />
-
-        {/* Header */}
+        {/* ── Compact header ──────────────────────────────────────────── */}
         <View style={[s.header, { borderBottomColor: theme.backgroundElement }]}>
           <View style={s.headerLeft}>
-            <Text style={[s.playerName, { color: theme.text }]}>Player {myId + 1}</Text>
+            <View style={[s.playerAvatar, { backgroundColor: PLAYER_FILL[myId] }]}>
+              <Text style={[s.playerAvatarText, { color: PLAYER_TEXT_COLOR[myId] }]}>
+                P{myId + 1}
+              </Text>
+            </View>
             <View style={[s.phaseBadge, { backgroundColor: theme.backgroundElement }]}>
-              <Text style={[s.phaseText, { color: theme.textSecondary }]}>{PHASE_LABEL[phase]}</Text>
+              <Text style={[s.phaseText, { color: theme.textSecondary }]}>
+                {PHASE_LABEL[phase]}
+              </Text>
             </View>
           </View>
-          <View style={s.headerRight}>
-            {boardAvailable && (
-              <Pressable
-                onPress={() => setShowBoard(true)}
-                hitSlop={12}
-                style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
-                <SFSymbolIcon name="map" size={22} color={theme.text} fallback="🗺" />
-              </Pressable>
-            )}
-            <Pressable
-              onPress={() => handleDisconnect()}
-              hitSlop={12}
-              style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
-              <SFSymbolIcon name="xmark.circle" size={22} color={theme.textSecondary} fallback="✕" />
-            </Pressable>
-          </View>
+          <Pressable
+            onPress={handleDisconnect}
+            hitSlop={12}
+            accessibilityLabel="Leave game"
+            accessibilityRole="button"
+            style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
+            <SFSymbolIcon name="xmark.circle" size={22} color={theme.textSecondary} fallback="✕" />
+          </Pressable>
         </View>
 
-        {/* Scrollable content */}
+        {/* ── Scrollable content ───────────────────────────────────────── */}
         <ScrollView
           style={s.scroll}
           contentContainerStyle={s.scrollContent}
           showsVerticalScrollIndicator={false}>
 
-          <FadeSlideIn triggerKey={phase}>
-            <PhaseHero
-              gameState={gameState}
-              phase={phase}
-              myId={myId}
+          {/* ── Board map card — compact inline, tap to expand ────────── */}
+          {showBoardInline && (
+            <Pressable
+              onPress={() => setShowBoardExpanded(true)}
+              accessibilityLabel="View full board map"
+              accessibilityRole="button"
+              style={({ pressed }) => [
+                s.boardCard,
+                { backgroundColor: theme.backgroundElement, opacity: pressed ? 0.88 : 1 },
+              ]}>
+              <BoardMap
+                tiles={gameState?.tiles ?? null}
+                vertices={gameState?.vertices}
+                edges={gameState?.edges}
+                robberTile={gameState?.robberTile}
+                rotation={boardRotation}
+                size={inlineMapSize}
+                showPorts
+                showVertexIndices={debug.vertexOverlay}
+                showEdgeIndices={debug.edgeOverlay}
+              />
+              {/* Expand affordance badge */}
+              <View style={s.expandBadge}>
+                <SFSymbolIcon
+                  name="arrow.up.left.and.arrow.down.right"
+                  size={12}
+                  color="#fff"
+                  fallback="⤢"
+                />
+              </View>
+            </Pressable>
+          )}
+
+          {/* ── Phase status ─────────────────────────────────────────── */}
+          {showBoardInline && isPlaying ? (
+            <CompactPlayingStatus
               myTurn={myTurn}
-              numPlayers={numPlayers}
               currentPlayer={currentPlayer}
               hasRolled={hasRolled}
-              connectedCount={connectedCount}
+              die1={gameState?.die1 ?? 0}
+              die2={gameState?.die2 ?? 0}
               theme={theme}
             />
-          </FadeSlideIn>
-
-          {/* Difficulty selection in the lobby */}
-          {phase === GamePhase.LOBBY && (
-            <LobbyDifficultyPicker
-              currentDifficulty={gameState?.difficulty ?? Difficulty.NORMAL}
-              myId={myId}
-            />
+          ) : (
+            <FadeSlideIn triggerKey={phase}>
+              <PhaseHero
+                gameState={gameState}
+                phase={phase}
+                myId={myId}
+                myTurn={myTurn}
+                numPlayers={numPlayers}
+                currentPlayer={currentPlayer}
+                hasRolled={hasRolled}
+                connectedCount={connectedCount}
+                theme={theme}
+              />
+            </FadeSlideIn>
           )}
 
-          {/* Orientation calibration in the lobby */}
-          {phase === GamePhase.LOBBY && (
-            <LobbyOrientationPicker />
+          {/* ── Lobby pickers ────────────────────────────────────────── */}
+          {isLobby && (
+            <>
+              <LobbyDifficultyPicker
+                currentDifficulty={gameState?.difficulty ?? Difficulty.NORMAL}
+                myId={myId}
+              />
+              <LobbyOrientationPicker />
+            </>
           )}
 
+          {/* ── Resource / store / trade / dev-card panels ───────────── */}
           {sharedProps && showResources && (
             <>
               <DistributionToast {...sharedProps} />
@@ -338,7 +573,7 @@ export default function GameScreen() {
           </Text>
         </ScrollView>
 
-        {/* Action bar */}
+        {/* ── Action bar ──────────────────────────────────────────────── */}
         <ActionBar
           buttons={buttons}
           onAction={handleAction}
@@ -350,23 +585,27 @@ export default function GameScreen() {
         />
       </SafeAreaView>
 
-      {/* Modal overlays */}
-      {sharedProps && <RobberOverlay   {...sharedProps} />}
-      {sharedProps && <StealOverlay    {...sharedProps} />}
-      {sharedProps && <DiscardOverlay  {...sharedProps} />}
+      {/* ── Expanded board overlay (below alerts/toasts in render order) ── */}
+      <BoardExpandedOverlay
+        visible={showBoardExpanded}
+        onClose={() => setShowBoardExpanded(false)}
+        boardState={gameState}
+        boardRotation={boardRotation}
+        debug={debug}
+        theme={theme}
+      />
+
+      {/* ── Full-screen overlays ─────────────────────────────────────── */}
+      {sharedProps && <RobberOverlay      {...sharedProps} />}
+      {sharedProps && <StealOverlay       {...sharedProps} />}
+      {sharedProps && <DiscardOverlay     {...sharedProps} />}
       {sharedProps && <IncomingTradeDialog {...sharedProps} />}
       <DrawnDevCardModal
         card={drawnCard}
         onDismiss={() => setDrawnCard(null)}
         theme={theme}
       />
-
-      {/* Board overview modal */}
-      <BoardOverview
-        visible={showBoard}
-        onClose={() => setShowBoard(false)}
-        boardState={gameState}
-      />
+      <PlacementToast message={rejectMessage} onClose={() => setRejectMessage(null)} theme={theme} />
     </View>
   );
 }
@@ -378,22 +617,52 @@ const s = StyleSheet.create({
   safeArea: { flex: 1 },
 
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'space-between',
     paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.three,
+    paddingVertical:   Spacing.two,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerLeft:  { gap: Spacing.one },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  headerBtn:   { padding: Spacing.one },
-  playerName:  { fontSize: 20, fontWeight: '700' },
-  phaseBadge:  { alignSelf: 'flex-start', paddingHorizontal: Spacing.two, paddingVertical: 3, borderRadius: 6 },
-  phaseText:   { fontSize: 12, fontWeight: '600' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  playerAvatar: {
+    width:          34,
+    height:         34,
+    borderRadius:   17,
+    alignItems:     'center',
+    justifyContent: 'center',
+  },
+  playerAvatarText: { fontSize: 13, fontWeight: '800' },
+  phaseBadge: {
+    alignSelf:         'flex-start',
+    paddingHorizontal: Spacing.two,
+    paddingVertical:   3,
+    borderRadius:      6,
+  },
+  phaseText: { fontSize: 12, fontWeight: '600' },
+  headerBtn: { padding: Spacing.one },
 
   scroll:        { flex: 1 },
   scrollContent: { padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },
+
+  boardCard: {
+    borderRadius: 16,
+    overflow:     'hidden',
+    // Subtle depth
+    shadowColor:   '#000',
+    shadowOffset:  { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius:  4,
+    elevation:     2,
+  },
+  expandBadge: {
+    position:     'absolute',
+    top:          Spacing.two,
+    right:        Spacing.two,
+    borderRadius: 8,
+    padding:      6,
+    backgroundColor: 'rgba(0,0,0,0.32)',
+  },
 
   connectedLabel: { fontSize: 11, textAlign: 'center', marginTop: Spacing.two },
 });

@@ -64,17 +64,12 @@ static const OrientationPoint kOrientationPoints[] = {
 
 // Render the lobby LED state: dim base + orientation triangle + player slots.
 static void showLobbyLeds() {
-    const uint8_t mask = comms::connectedMask();
     led::setAllTiles(CRGB(20, 20, 40));  // dim blue-grey base
 
     // Orientation triangle
     for (const auto& p : kOrientationPoints)
         led::setTileColor(p.tile, p.color);
 
-    // Connected-player indicators on tiles 0–3
-    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-        if (mask & (1 << i)) led::setTileColor(i, kPlayerColors[i]);
-    }
     led::show();
 }
 
@@ -94,12 +89,12 @@ static void runDemoFrame() {
 
 static CRGB portColor(PortType pt) {
     switch (pt) {
-        case PortType::LUMBER_2_1:  return CRGB(0, 200, 0);
-        case PortType::WOOL_2_1:    return CRGB(255, 255, 0);
-        case PortType::GRAIN_2_1:   return CRGB(255, 165, 0);
-        case PortType::BRICK_2_1:   return CRGB(255, 0, 0);
-        case PortType::ORE_2_1:     return CRGB(128, 0, 128);
-        case PortType::GENERIC_3_1: return CRGB::White;
+        case PortType::LUMBER_2_1:  return CRGB(0, 255, 0);   // green
+        case PortType::WOOL_2_1:    return CRGB(0, 255, 255); // cyan
+        case PortType::GRAIN_2_1:   return CRGB(255, 255, 0); // yellow
+        case PortType::BRICK_2_1:   return CRGB(255, 0, 0);   // red
+        case PortType::ORE_2_1:     return CRGB(0, 0, 255);   // blue
+        case PortType::GENERIC_3_1: return CRGB(255, 255, 255); // white
         default:                    return CRGB::Black;
     }
 }

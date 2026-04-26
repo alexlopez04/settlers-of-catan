@@ -24,12 +24,12 @@ static bool g_needs_show = false;
 
 CRGB biomeColor(Biome b) {
     switch (b) {
-        case Biome::FOREST:   return CRGB(0, 200, 0);
-        case Biome::PASTURE:  return CRGB(255, 255, 0);
-        case Biome::FIELD:    return CRGB(255, 165, 0);
-        case Biome::HILL:     return CRGB(255, 0, 0);
-        case Biome::MOUNTAIN: return CRGB(128, 0, 128);
-        case Biome::DESERT:   return CRGB(255, 255, 255);
+        case Biome::FOREST:   return CRGB(0, 255, 0);     // green
+        case Biome::PASTURE:  return CRGB(0, 255, 255);   // cyan
+        case Biome::FIELD:    return CRGB(255, 255, 0);   // yellow
+        case Biome::HILL:     return CRGB(255, 0, 0);     // red
+        case Biome::MOUNTAIN: return CRGB(0, 0, 255);     // blue
+        case Biome::DESERT:   return CRGB(0, 0, 0);       // off
         default:              return CRGB::Black;
     }
 }

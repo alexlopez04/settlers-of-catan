@@ -45,21 +45,21 @@ import {
 // Exported so the BoardOverview legend can use identical colours.
 
 export const BIOME_FILL: Record<Biome, string> = {
-  [Biome.DESERT]:   '#f5e6a3',
-  [Biome.FOREST]:   '#2d6a2d',
-  [Biome.PASTURE]:  '#78c850',
-  [Biome.FIELD]:    '#f0c040',
-  [Biome.HILL]:     '#c0503a',
-  [Biome.MOUNTAIN]: '#7a5fa0',
+  [Biome.DESERT]:   '#c8b978',  // sandy beige
+  [Biome.FOREST]:   '#3d5e35',  // dark muted green
+  [Biome.PASTURE]:  '#6a9e52',  // medium muted green
+  [Biome.FIELD]:    '#c09820',  // muted amber
+  [Biome.HILL]:     '#9a4030',  // muted terracotta
+  [Biome.MOUNTAIN]: '#6a5490',  // muted mauve
 };
 
 const BIOME_STROKE: Record<Biome, string> = {
-  [Biome.DESERT]:   '#e0c878',
-  [Biome.FOREST]:   '#1a4a1a',
-  [Biome.PASTURE]:  '#4e9a28',
-  [Biome.FIELD]:    '#c09010',
-  [Biome.HILL]:     '#8a2810',
-  [Biome.MOUNTAIN]: '#5a3f80',
+  [Biome.DESERT]:   '#a89858',
+  [Biome.FOREST]:   '#243e20',
+  [Biome.PASTURE]:  '#4a7a38',
+  [Biome.FIELD]:    '#8a7010',
+  [Biome.HILL]:     '#6e2820',
+  [Biome.MOUNTAIN]: '#4a3870',
 };
 
 const EMPTY_FILL   = '#3a4a5a';
@@ -74,12 +74,32 @@ export const PLAYER_FILL = ['#e63946', '#4361ee', '#f4a261', '#f0f0f0'];
 const PLAYER_STROKE = ['#a01020', '#2040b0', '#c06820', '#909090'];
 
 const PORT_FILL: Record<PortType, string> = {
-  [PortType.GENERIC_3_1]: '#909090',
-  [PortType.LUMBER_2_1]:  '#2d6a2d',
-  [PortType.WOOL_2_1]:    '#5a9a30',
-  [PortType.GRAIN_2_1]:   '#c8960a',
-  [PortType.BRICK_2_1]:   '#b03a2a',
-  [PortType.ORE_2_1]:     '#6a4f8a',
+  [PortType.GENERIC_3_1]: '#aaaaaa',
+  [PortType.LUMBER_2_1]:  '#3d5e35',
+  [PortType.WOOL_2_1]:    '#6a9e52',
+  [PortType.GRAIN_2_1]:   '#c09820',
+  [PortType.BRICK_2_1]:   '#9a4030',
+  [PortType.ORE_2_1]:     '#6a5490',
+};
+
+/** Short resource label shown on each tile (inside the token for numbered tiles, centred for desert). */
+const BIOME_LABEL: Record<Biome, string> = {
+  [Biome.DESERT]:   'Desert',
+  [Biome.FOREST]:   'Lumber',
+  [Biome.PASTURE]:  'Wool',
+  [Biome.FIELD]:    'Grain',
+  [Biome.HILL]:     'Brick',
+  [Biome.MOUNTAIN]: 'Ore',
+};
+
+/** Text colour that contrasts against each biome fill. */
+const BIOME_LABEL_COLOR: Record<Biome, string> = {
+  [Biome.DESERT]:   '#6a5830',
+  [Biome.FOREST]:   'rgba(255,255,255,0.75)',
+  [Biome.PASTURE]:  'rgba(255,255,255,0.80)',
+  [Biome.FIELD]:    'rgba(255,255,255,0.80)',
+  [Biome.HILL]:     'rgba(255,255,255,0.75)',
+  [Biome.MOUNTAIN]: 'rgba(255,255,255,0.80)',
 };
 
 const PORT_LABELS: Record<PortType, string> = {
@@ -230,27 +250,51 @@ export function BoardMap({
                 />
               )}
 
-              {/* Number token */}
+              {/* Number token — shows resource label above, number below */}
               {hasTileData && tileNum != null && tileNum > 0 && (
                 <G>
                   <Circle
                     cx={centre.x}
                     cy={centre.y}
-                    r={hs * 0.36}
+                    r={hs * 0.44}
                     fill="#f5f0e8"
                     stroke="#c8b878"
                     strokeWidth={hs * 0.05}
                   />
+                  {/* Resource label (small, above number) */}
                   <SvgText
                     x={centre.x}
-                    y={centre.y + hs * 0.13}
+                    y={centre.y - hs * 0.08}
                     textAnchor="middle"
-                    fontSize={hs * 0.35}
+                    fontSize={hs * 0.18}
+                    fontWeight="600"
+                    fill="#666044">
+                    {BIOME_LABEL[tiles![t].biome]}
+                  </SvgText>
+                  {/* Number (larger, below label) */}
+                  <SvgText
+                    x={centre.x}
+                    y={centre.y + hs * 0.28}
+                    textAnchor="middle"
+                    fontSize={hs * 0.30}
                     fontWeight="bold"
                     fill={tileNum === 6 || tileNum === 8 ? '#b01010' : '#1a1a1a'}>
                     {tileNum}
                   </SvgText>
                 </G>
+              )}
+
+              {/* Desert label (no number token) */}
+              {hasTileData && (tileNum == null || tileNum === 0) && tiles![t]?.biome === Biome.DESERT && (
+                <SvgText
+                  x={centre.x}
+                  y={centre.y + hs * 0.08}
+                  textAnchor="middle"
+                  fontSize={hs * 0.22}
+                  fontWeight="600"
+                  fill={BIOME_LABEL_COLOR[Biome.DESERT]}>
+                  Desert
+                </SvgText>
               )}
 
               {/* Robber marker */}
@@ -312,6 +356,28 @@ export function BoardMap({
         </G>
       )}
 
+      {/* ── Road outlines (white border for contrast against tiles) ────── */}
+      {edges && edges.length > 0 && (
+        <G>
+          {edges.map((e, ei) => {
+            if (!e) return null;
+            const [v0, v1] = EDGE_VERTICES[ei];
+            const p0 = rotVerts[v0];
+            const p1 = rotVerts[v1];
+            return (
+              <Line
+                key={`ro${ei}`}
+                x1={p0.x} y1={p0.y}
+                x2={p1.x} y2={p1.y}
+                stroke="rgba(255,255,255,0.9)"
+                strokeWidth={hs * 0.34}
+                strokeLinecap="round"
+              />
+            );
+          })}
+        </G>
+      )}
+
       {/* ── Roads ──────────────────────────────────────────────────────── */}
       {edges && edges.length > 0 && (
         <G>
@@ -326,7 +392,7 @@ export function BoardMap({
                 x1={p0.x} y1={p0.y}
                 x2={p1.x} y2={p1.y}
                 stroke={PLAYER_FILL[e.owner]}
-                strokeWidth={hs * 0.2}
+                strokeWidth={hs * 0.20}
                 strokeLinecap="round"
               />
             );
@@ -346,15 +412,15 @@ export function BoardMap({
                 <Circle
                   key={vi}
                   cx={pos.x} cy={pos.y}
-                  r={hs * 0.26}
+                  r={hs * 0.28}
                   fill={PLAYER_FILL[v.owner]}
-                  stroke={PLAYER_STROKE[v.owner]}
-                  strokeWidth={hs * 0.06}
+                  stroke="rgba(255,255,255,0.9)"
+                  strokeWidth={hs * 0.10}
                 />
               );
             }
             // Settlement: diamond (rotated square)
-            const sq = hs * 0.18;
+            const sq = hs * 0.20;
             return (
               <Polygon
                 key={vi}
@@ -365,8 +431,8 @@ export function BoardMap({
                   `${pos.x - sq},${pos.y}`,
                 ].join(' ')}
                 fill={PLAYER_FILL[v.owner]}
-                stroke={PLAYER_STROKE[v.owner]}
-                strokeWidth={hs * 0.05}
+                stroke="rgba(255,255,255,0.9)"
+                strokeWidth={hs * 0.10}
               />
             );
           })}

@@ -101,7 +101,7 @@ export function TurnChip({ myTurn, currentPlayer, theme }: {
     <View
       style={[s.turnChip, { backgroundColor: myTurn ? theme.primary : theme.backgroundElement }]}>
       <Text style={[s.turnChipText, { color: myTurn ? '#fff' : theme.text }]}>
-        {myTurn ? '⬤  Your turn' : `Player ${currentPlayer + 1}'s turn`}
+        {myTurn ? 'Your turn' : `Player ${currentPlayer + 1}'s turn`}
       </Text>
     </View>
   );
