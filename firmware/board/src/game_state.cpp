@@ -369,6 +369,15 @@ void placeRoad(uint8_t e, uint8_t p) {
     if (e >= EDGE_COUNT || p >= MAX_PLAYERS) return;
     edges[e].owner = p;
 }
+void setVertexState(uint8_t v, uint8_t owner, bool is_city) {
+    if (v >= VERTEX_COUNT) return;
+    vertices[v].owner   = owner;
+    vertices[v].is_city = is_city;
+}
+void setEdgeState(uint8_t e, uint8_t owner) {
+    if (e >= EDGE_COUNT) return;
+    edges[e].owner = owner;
+}
 
 uint8_t roadCount(uint8_t p) {
     if (p >= MAX_PLAYERS) return 0;
@@ -409,6 +418,8 @@ bool advanceReveal() {
     return false;
 }
 void resetReveal() { reveal_index = 0; }
+uint8_t revealIndex()          { return reveal_index; }
+void    setRevealIndex(uint8_t i) { reveal_index = (i < REVEAL_COUNT) ? i : 0; }
 
 // ── Initial placement — snake draft ────────────────────────────────────────
 static uint8_t playerForTurn(uint8_t i, uint8_t n, uint8_t first) {
@@ -420,6 +431,9 @@ static uint8_t playerForTurn(uint8_t i, uint8_t n, uint8_t first) {
 uint8_t setupRound()       { return setup_round_; }
 uint8_t setupTurn()        { return setup_turn_; }
 uint8_t setupFirstPlayer() { return setup_first_player_; }
+void setSetupRound(uint8_t r)       { setup_round_ = r; }
+void setSetupTurn(uint8_t t)        { setup_turn_  = t; }
+void setSetupFirstPlayer(uint8_t fp) { setup_first_player_ = fp; }
 
 void resetSetupRound(uint8_t first_player) {
     if (num_players == 0) return;
@@ -471,6 +485,15 @@ void initDevDeck() {
 uint8_t devDeckRemaining() {
     return (uint8_t)(dev_deck_size_ - dev_deck_pos_);
 }
+const uint8_t* devDeckData()    { return dev_deck_; }
+uint8_t        devDeckPos()     { return dev_deck_pos_; }
+uint8_t        devDeckSizeTotal() { return dev_deck_size_; }
+void restoreDevDeck(const uint8_t* deck, uint8_t pos, uint8_t size) {
+    if (size > DEV_DECK_SIZE) size = DEV_DECK_SIZE;
+    memcpy(dev_deck_, deck, size);
+    dev_deck_size_ = size;
+    dev_deck_pos_  = (pos <= size) ? pos : size;
+}
 Dev drawDevCard(uint8_t player) {
     if (player >= MAX_PLAYERS) return Dev::COUNT;
     if (dev_deck_pos_ >= dev_deck_size_) return Dev::COUNT;
@@ -511,9 +534,15 @@ void incKnightsPlayed(uint8_t p) {
     if (p < MAX_PLAYERS) knights_played_[p]++;
     recomputeLargestArmy();
 }
+void setKnightsPlayed(uint8_t p, uint8_t n) {
+    if (p < MAX_PLAYERS) knights_played_[p] = n;
+}
 uint8_t largestArmyPlayer() { return largest_army_player_; }
 uint8_t longestRoadPlayer() { return longest_road_player_; }
 uint8_t longestRoadLength() { return longest_road_length_; }
+void setLargestArmyPlayer(uint8_t p)   { largest_army_player_ = p; }
+void setLongestRoadPlayer(uint8_t p)   { longest_road_player_ = p; }
+void setLongestRoadLength(uint8_t len) { longest_road_length_ = len; }
 
 void recomputeLargestArmy() {
     // Holder keeps the title in a tie; only transfer if a candidate strictly
@@ -623,6 +652,20 @@ void recomputeLongestRoad() {
 uint8_t publicVp(uint8_t p) { return (p < MAX_PLAYERS) ? public_vp_[p] : 0; }
 uint8_t totalVp(uint8_t p)  { return (p < MAX_PLAYERS) ? total_vp_[p]  : 0; }
 
+// Recomputes VP cache without touching bonus-holder fields.
+// Used after a save/restore so the saved largest_army_player_ /
+// longest_road_player_ values are preserved.
+void recomputeVpCacheOnly() {
+    for (uint8_t p = 0; p < MAX_PLAYERS; ++p) {
+        uint8_t pub = 0;
+        pub += settlementCount(p);
+        pub += (uint8_t)(cityCount(p) * 2u);
+        if (p == largest_army_player_) pub += 2;
+        if (p == longest_road_player_) pub += 2;
+        public_vp_[p] = pub;
+        total_vp_[p]  = (uint8_t)(pub + dev_count_[p][(uint8_t)Dev::VP]);
+    }
+}
 void recomputeVp() {
     recomputeLargestArmy();
     recomputeLongestRoad();
@@ -650,6 +693,9 @@ uint8_t checkWinner() {
 uint8_t pendingRoadBuy(uint8_t p)        { return (p < MAX_PLAYERS) ? pending_road_buy_[p] : 0; }
 uint8_t pendingSettlementBuy(uint8_t p)  { return (p < MAX_PLAYERS) ? pending_settlement_buy_[p] : 0; }
 uint8_t pendingCityBuy(uint8_t p)        { return (p < MAX_PLAYERS) ? pending_city_buy_[p] : 0; }
+void    setPendingRoadBuy(uint8_t p, uint8_t n)       { if (p < MAX_PLAYERS) pending_road_buy_[p] = n; }
+void    setPendingSettlementBuy(uint8_t p, uint8_t n) { if (p < MAX_PLAYERS) pending_settlement_buy_[p] = n; }
+void    setPendingCityBuy(uint8_t p, uint8_t n)       { if (p < MAX_PLAYERS) pending_city_buy_[p] = n; }
 void    addPendingRoadBuy(uint8_t p)       { if (p < MAX_PLAYERS) pending_road_buy_[p]++; }
 void    addPendingSettlementBuy(uint8_t p) { if (p < MAX_PLAYERS) pending_settlement_buy_[p]++; }
 void    addPendingCityBuy(uint8_t p)       { if (p < MAX_PLAYERS) pending_city_buy_[p]++; }

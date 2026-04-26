@@ -59,13 +59,55 @@ export default function GameScreen() {
   const [drawnCard, setDrawnCard]           = useState<DevCard | null>(null);
   // Snapshot of my dev-card counts at the start of my current turn; null when not my turn.
   const [turnStartCards, setTurnStartCards] = useState<number[] | null>(null);
-  const rejectTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevDevCardsRef = useRef<number[]>([]);
+  const rejectTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevDevCardsRef    = useRef<number[]>([]);
+  // Tracks whether the resume-game dialog has already been shown this session
+  // so we don't prompt again if the state is briefly re-broadcast.
+  const resumeShownRef     = useRef(false);
 
   // Navigate away when disconnected.
   useEffect(() => {
     if (connectionState === 'idle') router.replace('/');
   }, [connectionState]);
+
+  // Derive phase early so it can be used in hooks below.
+  const phase = gameState?.phase ?? GamePhase.LOBBY;
+
+  // ── Resume-game dialog ──────────────────────────────────────────────────
+  // Only player 0 (slot 0) is prompted; others simply wait. Once the player
+  // answers, the board clears hasSavedGame and stops broadcasting it.
+  // resumeShownRef is intentionally never reset mid-session: the component
+  // unmounts on disconnect, which resets it naturally for the next session.
+  useEffect(() => {
+    if (
+      !gameState?.hasSavedGame ||
+      phase !== GamePhase.LOBBY ||
+      playerId !== 0 ||
+      resumeShownRef.current
+    ) {
+      return;
+    }
+    resumeShownRef.current = true;
+    Alert.alert(
+      'Resume Previous Game?',
+      'A saved game was found from a previous session. Would you like to continue where you left off?',
+      [
+        {
+          text: 'Start New Game',
+          style: 'destructive',
+          onPress: () => sendAction(PlayerAction.RESUME_NO),
+        },
+        {
+          text: 'Resume',
+          style: 'default',
+          onPress: () => sendAction(PlayerAction.RESUME_YES),
+        },
+      ],
+      { cancelable: false },
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState?.hasSavedGame, phase, playerId]);
+
 
   const handleAction = useCallback(
     async (action: PlayerAction) => {
@@ -139,7 +181,6 @@ export default function GameScreen() {
 
   // ── Derived values ─────────────────────────────────────────────────────
 
-  const phase         = gameState?.phase ?? GamePhase.LOBBY;
   const numPlayers    = gameState?.numPlayers ?? 0;
   const currentPlayer = gameState?.currentPlayer ?? 0;
   const myTurn        = gameState != null && currentPlayer === myId;

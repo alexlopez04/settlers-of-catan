@@ -169,6 +169,9 @@ const EdgeState&   edgeState(uint8_t edge_id);
 void placeSettlement(uint8_t vertex_id, uint8_t player);
 void upgradeToCity(uint8_t vertex_id);
 void placeRoad(uint8_t edge_id, uint8_t player);
+// Direct setters for save/restore.
+void setVertexState(uint8_t vertex_id, uint8_t owner, bool is_city);
+void setEdgeState(uint8_t edge_id, uint8_t owner);
 
 // Per-player piece counts (counted from ownership tables).
 uint8_t roadCount(uint8_t player);
@@ -188,6 +191,8 @@ void    setRobberTile(uint8_t tile_id);
 uint8_t currentRevealNumber();
 bool    advanceReveal();
 void    resetReveal();
+uint8_t revealIndex();          // raw index into kRevealOrder[] (for save/restore)
+void    setRevealIndex(uint8_t i);
 
 // Initial placement — snake draft
 uint8_t setupRound();        // 1 = forward, 2 = reverse
@@ -195,6 +200,10 @@ uint8_t setupTurn();         // 0-based position in the 2*N sequence
 uint8_t setupFirstPlayer();
 void    resetSetupRound(uint8_t first_player);
 bool    advanceSetupTurn();
+// Direct setters for save/restore (bypass derived recalculation).
+void    setSetupRound(uint8_t r);
+void    setSetupTurn(uint8_t t);
+void    setSetupFirstPlayer(uint8_t fp);
 
 // Dice
 uint8_t lastDie1();
@@ -216,6 +225,11 @@ uint8_t devDeckRemaining();
 Dev     drawDevCard(uint8_t player);
 uint8_t devCardCount(uint8_t player, Dev d);
 void    setDevCardCount(uint8_t player, Dev d, uint8_t count);
+// Dev-deck internals needed for save/restore.
+const uint8_t* devDeckData();           // pointer to the 25-card shuffled array
+uint8_t        devDeckPos();            // next-draw index
+uint8_t        devDeckSizeTotal();      // total deck size (25 once initialised)
+void    restoreDevDeck(const uint8_t* deck, uint8_t pos, uint8_t size);
 // Cards bought this turn — these are NOT playable until the next turn.
 uint8_t devCardBoughtThisTurn(uint8_t player, Dev d);
 void    clearDevCardsBoughtThisTurn(uint8_t player);
@@ -232,11 +246,21 @@ uint8_t longestRoadPlayer();   // NO_PLAYER if none
 uint8_t longestRoadLength();
 void    recomputeLargestArmy();
 void    recomputeLongestRoad();
+// Direct setters for save/restore (preserve tie-breaking history).
+void    setKnightsPlayed(uint8_t player, uint8_t n);
+void    setLargestArmyPlayer(uint8_t p);
+void    setLongestRoadPlayer(uint8_t p);
+void    setLongestRoadLength(uint8_t len);
+// Recompute public_vp_ / total_vp_ without touching the bonus-holder fields.
+void    recomputeVpCacheOnly();
 
 // Pending purchases (per piece type, per player).
 uint8_t pendingRoadBuy(uint8_t player);
 uint8_t pendingSettlementBuy(uint8_t player);
 uint8_t pendingCityBuy(uint8_t player);
+void    setPendingRoadBuy(uint8_t player, uint8_t n);       // direct setter for restore
+void    setPendingSettlementBuy(uint8_t player, uint8_t n); // direct setter for restore
+void    setPendingCityBuy(uint8_t player, uint8_t n);       // direct setter for restore
 void    addPendingRoadBuy(uint8_t player);
 void    addPendingSettlementBuy(uint8_t player);
 void    addPendingCityBuy(uint8_t player);

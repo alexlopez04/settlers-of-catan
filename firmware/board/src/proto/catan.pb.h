@@ -52,7 +52,10 @@ typedef enum _catan_PlayerAction {
     catan_PlayerAction_ACTION_PLAY_MONOPOLY = 25, /* payload: monopoly_res */
     /* Lobby-only: Player 0 selects board difficulty.
        payload: monopoly_res carries the Difficulty value (0..3). */
-    catan_PlayerAction_ACTION_SET_DIFFICULTY = 26
+    catan_PlayerAction_ACTION_SET_DIFFICULTY = 26,
+    /* Sent in response to the resume-game dialog (LOBBY phase only). */
+    catan_PlayerAction_ACTION_RESUME_YES = 27,
+    catan_PlayerAction_ACTION_RESUME_NO = 28
 } catan_PlayerAction;
 
 /* Resource type (also used as index into per-player count arrays):
@@ -195,6 +198,9 @@ typedef struct _catan_BoardState {
  the value is 0 (EASY), which proto3 would otherwise omit. */
     bool has_difficulty;
     uint32_t difficulty;
+    /* True when a saved game from a previous session is available for resume.
+ Cleared once the first player responds with RESUME_YES or RESUME_NO. */
+    bool has_saved_game;
 } catan_BoardState;
 
 typedef struct _catan_PlayerInput {
@@ -246,8 +252,8 @@ extern "C" {
 #define _catan_GamePhase_ARRAYSIZE ((catan_GamePhase)(catan_GamePhase_PHASE_GAME_OVER+1))
 
 #define _catan_PlayerAction_MIN catan_PlayerAction_ACTION_NONE
-#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_SET_DIFFICULTY
-#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_SET_DIFFICULTY+1))
+#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_RESUME_NO
+#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_RESUME_NO+1))
 
 #define _catan_ResourceType_MIN catan_ResourceType_RES_LUMBER
 #define _catan_ResourceType_MAX catan_ResourceType_RES_ORE
@@ -263,9 +269,9 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0, false}
 #define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0, false}
 #define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -313,6 +319,7 @@ extern "C" {
 #define catan_BoardState_bank_supply_tag         60
 #define catan_BoardState_last_distribution_tag   61
 #define catan_BoardState_difficulty_tag           62
+#define catan_BoardState_has_saved_game_tag        63
 #define catan_PlayerInput_proto_version_tag      1
 #define catan_PlayerInput_player_id_tag          2
 #define catan_PlayerInput_action_tag             3
@@ -378,7 +385,8 @@ X(a, STATIC,   SINGULAR, BYTES,    trade_offer,      52) \
 X(a, STATIC,   SINGULAR, BYTES,    trade_want,       53) \
 X(a, STATIC,   SINGULAR, BYTES,    bank_supply,      60) \
 X(a, STATIC,   SINGULAR, BYTES,    last_distribution,  61) \
-X(a, STATIC,   OPTIONAL, UINT32,   difficulty,         62)
+X(a, STATIC,   OPTIONAL, UINT32,   difficulty,         62) \
+X(a, STATIC,   SINGULAR, BOOL,     has_saved_game,     63)
 #define catan_BoardState_CALLBACK NULL
 #define catan_BoardState_DEFAULT NULL
 

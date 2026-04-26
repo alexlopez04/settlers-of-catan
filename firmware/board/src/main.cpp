@@ -32,8 +32,13 @@
 #include "core/state_machine.h"
 #include "core/events.h"
 #include "core/rng.h"
+#include "persist.h"
 
 static core::StateMachine sm;
+
+// Set when a valid saved game exists in NVS and the player has not yet
+// responded to the resume prompt. Cleared on RESUME_YES or RESUME_NO.
+static bool g_pending_resume = false;
 
 // ── Timing ──────────────────────────────────────────────────────────────────
 static uint32_t last_broadcast_ms = 0;
@@ -150,6 +155,9 @@ static core::ActionKind toActionKind(catan_PlayerAction a) {
         case catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY: return core::ActionKind::PLAY_YEAR_OF_PLENTY;
         case catan_PlayerAction_ACTION_PLAY_MONOPOLY:       return core::ActionKind::PLAY_MONOPOLY;
         case catan_PlayerAction_ACTION_SET_DIFFICULTY:      return core::ActionKind::SET_DIFFICULTY;
+        // Resume actions are handled before reaching the FSM; return NONE here.
+        case catan_PlayerAction_ACTION_RESUME_YES:          return core::ActionKind::NONE;
+        case catan_PlayerAction_ACTION_RESUME_NO:           return core::ActionKind::NONE;
         default:                                            return core::ActionKind::NONE;
     }
 }
@@ -185,6 +193,25 @@ static const char* rejectReasonName(core::RejectReason r) {
 static void broadcastBoardState();
 
 // ---------------------------------------------------------------------------
+// LED helper: sync LED state to current game phase after a save/restore.
+// ---------------------------------------------------------------------------
+static void syncLedsToPhase_() {
+    const GamePhase rp = game::phase();
+    if (rp == GamePhase::PLAYING || rp == GamePhase::ROBBER ||
+        rp == GamePhase::DISCARD  || rp == GamePhase::GAME_OVER ||
+        rp == GamePhase::INITIAL_PLACEMENT || rp == GamePhase::NUMBER_REVEAL ||
+        rp == GamePhase::BOARD_SETUP) {
+        led::colorAllTilesByBiome();
+        for (uint8_t p = 0; p < PORT_COUNT; ++p)
+            led::setPortColor(p, portColor(PORT_TOPO[p].type));
+        if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
+        led::show();
+    } else {
+        showLobbyLeds();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Effect → hardware side-effects
 // ---------------------------------------------------------------------------
 static void applyEffect(const core::Effect& ef) {
@@ -199,6 +226,11 @@ static void applyEffect(const core::Effect& ef) {
                 led::colorAllTilesByBiome();
                 if (game::robberTile() < TILE_COUNT) led::dimTile(game::robberTile());
                 led::show();
+                persist::save();   // board fully set up, game is starting
+            } else if (p == GamePhase::NUMBER_REVEAL) {
+                persist::save();   // board layout is now fixed
+            } else if (p == GamePhase::INITIAL_PLACEMENT) {
+                persist::save();   // numbers revealed, placement begins
             }
             break;
         }
@@ -303,6 +335,7 @@ static void applyEffect(const core::Effect& ef) {
         }
         case EffectKind::TURN_ADVANCED:
             LOGI("TURN", "-> P%u", (unsigned)(ef.a + 1));
+            persist::save();
             break;
         case EffectKind::ROBBER_MOVED: {
             uint8_t new_t = ef.a, old_t = ef.b;
@@ -424,6 +457,41 @@ static void onPlayerInput(const catan_PlayerInput& in) {
     LOGI("INPUT", "P%u action=%u client='%s'",
          (unsigned)(in.player_id + 1), (unsigned)in.action, in.client_id);
 
+    // ── Resume-game dialog response ────────────────────────────────────
+    if (g_pending_resume && game::phase() == GamePhase::LOBBY) {
+        if (in.action == catan_PlayerAction_ACTION_RESUME_YES) {
+            persist::SavedGame sg;
+            if (persist::load(sg)) {
+                game::init();
+                sm.prepareForResume();
+                persist::restore(sg);
+                // Re-sync player-connected flags with live BLE state.
+                const uint8_t mask = comms::connectedMask();
+                for (uint8_t p = 0; p < MAX_PLAYERS; ++p)
+                    game::setPlayerConnected(p, (mask & (1u << p)) != 0);
+                syncLedsToPhase_();
+                LOGI("RESUME", "game restored: phase=%s player=%u/%u",
+                     game::phaseName(game::phase()),
+                     (unsigned)(game::currentPlayer() + 1),
+                     (unsigned)game::numPlayers());
+            } else {
+                LOGW("RESUME", "NVS load failed — starting fresh");
+                persist::clear();
+            }
+            g_pending_resume = false;
+            broadcastBoardState();
+            last_broadcast_ms = millis();
+            return;
+        }
+        if (in.action == catan_PlayerAction_ACTION_RESUME_NO) {
+            persist::clear();
+            g_pending_resume = false;
+            LOGI("RESUME", "player declined resume — fresh game");
+            broadcastBoardState();
+            last_broadcast_ms = millis();
+            return;
+        }
+    }
     core::ActionPayload p;
     p.res[0]  = (uint8_t)(in.res_lumber & 0xFF);
     p.res[1]  = (uint8_t)(in.res_wool   & 0xFF);
@@ -602,6 +670,7 @@ static void broadcastBoardState() {
     // Always encode difficulty, even when EASY (=0) which proto3 would otherwise omit.
     s.has_difficulty = true;
     s.difficulty = (uint32_t)game::difficulty();
+    s.has_saved_game = g_pending_resume;
 
     static uint8_t buf[CATAN_MAX_PAYLOAD];
     size_t n = catan_encode_board_state(&s, buf, sizeof(buf));
@@ -661,7 +730,11 @@ void setup() {
     LOGI("BOOT", "comms::init  (NimBLE peripheral)");
     comms::init();
 
-    LOGI("BOOT", "game::init");
+    // Check for a previously saved game before starting fresh.
+    LOGI("BOOT", "persist::init  (NVS)");
+    g_pending_resume = persist::init() && persist::hasSavedGame();
+    if (g_pending_resume) LOGI("BOOT", "saved game found — will prompt on first connect");
+
     game::init();
     sm.reset();
 

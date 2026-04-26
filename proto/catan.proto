@@ -72,6 +72,10 @@ enum PlayerAction {
   // Lobby-only: Player 0 selects board generation difficulty.
   // payload: monopoly_res carries the Difficulty value (0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT).
   ACTION_SET_DIFFICULTY       = 26;
+
+  // Sent in response to the resume-game dialog (LOBBY phase only).
+  ACTION_RESUME_YES           = 27;  // restore the saved game
+  ACTION_RESUME_NO            = 28;  // discard the saved game, start fresh
 }
 
 // Resource type (also used as index into per-player count arrays):
@@ -206,6 +210,10 @@ message BoardState {
   // Board generation difficulty selected by Player 0 in the lobby.
   // 0 = EASY, 1 = NORMAL (default), 2 = HARD, 3 = EXPERT.
   uint32 difficulty = 62;
+
+  // True when the board has a saved game from a previous session that the
+  // first connected player can choose to resume. Cleared once a choice is made.
+  bool has_saved_game = 63;
 }
 
 message PlayerInput {

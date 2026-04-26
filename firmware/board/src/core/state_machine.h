@@ -24,6 +24,11 @@ public:
 
     void reset();
 
+    // Called after a save/restore (persist::restore) to put the SM into a
+    // coherent state without re-randomising the board or re-starting the
+    // game. The restored game::phase() drives the next tick correctly.
+    void prepareForResume();
+
     // ── Event ingestion ─────────────────────────────────────────────────
     // Generic player action with full payload.
     void handlePlayerAction(uint8_t player, ActionKind action,

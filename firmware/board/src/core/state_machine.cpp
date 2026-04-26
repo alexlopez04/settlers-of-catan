@@ -51,6 +51,28 @@ bool StateMachine::pollEffect(Effect& out) {
 }
 bool StateMachine::hasEffects() const { return effect_head_ != effect_tail_; }
 
+void StateMachine::prepareForResume() {
+    // Clear any queued inputs that no longer apply.
+    pending_start_game_  = false;
+    pending_next_number_ = false;
+    pending_current_     = ActionKind::NONE;
+    pending_current_payload_ = ActionPayload();
+    // Mark board as already set up so handleBoardSetup_ won't re-randomise.
+    board_setup_done_    = true;
+    // Reset change-detection caches to 0xFF / NO_PLAYER so they re-emit
+    // on the first tick after restore, syncing LEDs and VP displays.
+    last_lobby_mask_     = 0xFF;
+    last_reveal_num_     = 0xFF;
+    pending_city_mask_   = 0;
+    last_initial_vertex_ = NO_PLAYER;
+    last_largest_army_player_ = NO_PLAYER;
+    last_longest_road_player_ = NO_PLAYER;
+    last_longest_road_length_ = 0;
+    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) last_emitted_vp_[i] = 0xFF;
+    // Flush any leftover effects from before the restore.
+    effect_head_ = effect_tail_ = 0;
+}
+
 void StateMachine::setPhase_(GamePhase p) {
     game::setPhase(p);
     pending_city_mask_ = 0;

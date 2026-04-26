@@ -103,6 +103,7 @@ export function createSimulatedState(): BoardState {
     bankSupply:       [19, 19, 19, 19, 19],
     lastDistribution: ZERO20(),
     difficulty:       Difficulty.NORMAL,
+    hasSavedGame:     false,
   };
 }
 

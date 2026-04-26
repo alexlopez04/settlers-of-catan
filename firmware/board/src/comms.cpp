@@ -375,4 +375,24 @@ void tick() {
 
 const Stats& stats() { return g_stats; }
 
+void getSlotClientIds(char out[MAX_PLAYERS][40]) {
+    portENTER_CRITICAL(&g_slot_mux);
+    for (uint8_t i = 0; i < MAX_PLAYERS; ++i)
+        strncpy(out[i], g_slots[i].client_id, 40);
+    portEXIT_CRITICAL(&g_slot_mux);
+}
+
+void restoreSlotClientIds(const char ids[MAX_PLAYERS][40]) {
+    portENTER_CRITICAL(&g_slot_mux);
+    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+        // Only populate if the slot is currently unoccupied so we don't
+        // overwrite a live session (called right after game::init()).
+        if (!g_slots[i].occupied) {
+            strncpy(g_slots[i].client_id, ids[i], 39);
+            g_slots[i].client_id[39] = '\0';
+        }
+    }
+    portEXIT_CRITICAL(&g_slot_mux);
+}
+
 }  // namespace comms

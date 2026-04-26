@@ -62,6 +62,10 @@ export enum PlayerAction {
   /** Lobby-only: Player 0 selects the board generation difficulty.
    *  Encode with `encodeSetDifficulty`. payload: monopolyRes = Difficulty value. */
   SET_DIFFICULTY = 26,
+
+  /** Sent in response to the resume-game dialog (LOBBY phase only). */
+  RESUME_YES = 27,
+  RESUME_NO  = 28,
 }
 
 /** Board generation difficulty preset. Matches firmware Difficulty enum. */
@@ -263,6 +267,13 @@ export interface BoardState {
 
   /** Board generation difficulty (0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT). */
   difficulty: Difficulty;
+
+  /**
+   * True when the board has a saved game from a previous power cycle that
+   * the first connected player (slot 0) can choose to resume.
+   * Cleared once the player responds with RESUME_YES or RESUME_NO.
+   */
+  hasSavedGame: boolean;
 }
 
 export interface PlayerInput {
@@ -646,6 +657,7 @@ function emptyBoardState(): BoardState {
     bankSupply: ZERO5(),
     lastDistribution: ZERO20(),
     difficulty: Difficulty.NORMAL,
+    hasSavedGame: false,
   };
 }
 
@@ -738,6 +750,7 @@ function decodeBoardStatePayload(buf: Uint8Array): BoardState | null {
         case 50: state.trade.fromPlayer = v; break;
         case 51: state.trade.toPlayer = v; break;
         case 62: state.difficulty = v as Difficulty; break;
+        case 63: state.hasSavedGame = v !== 0; break;
       }
     } else if (wireType === 2) {
       let len: number;

@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "catan_wire.h"
+#include "config.h"
 
 namespace comms {
 
@@ -60,5 +61,15 @@ struct Stats {
     uint32_t disconnect_events;
 };
 const Stats& stats();
+
+// ── Player identity persistence ────────────────────────────────────────────
+// Copy the current client_id strings for all slots into `out`.
+// Slots that have never been claimed have an empty string at that index.
+void getSlotClientIds(char out[MAX_PLAYERS][40]);
+
+// Pre-populate the client_id table from a previous session snapshot so
+// that reconnecting phones reclaim their original slot assignment.
+// Does NOT mark slots as occupied — that happens when the phone reconnects.
+void restoreSlotClientIds(const char ids[MAX_PLAYERS][40]);
 
 }  // namespace comms
