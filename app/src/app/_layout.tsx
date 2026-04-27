@@ -16,7 +16,7 @@ export default function RootLayout() {
           <BleProvider>
             <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
               <Stack.Screen name="index" />
-              <Stack.Screen name="game" />
+              <Stack.Screen name="game" options={{ gestureEnabled: false }} />
               <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="rules" options={{ animation: 'slide_from_right' }} />
             </Stack>
