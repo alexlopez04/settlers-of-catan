@@ -3,8 +3,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -36,6 +34,7 @@ import type { BoardState } from '@/services/proto';
 import type { BoardRotation } from '@/utils/board-rotation';
 import { SFSymbolIcon } from '@/components/ui/symbol';
 import { BoardMap, PLAYER_FILL } from '@/components/ui/board-map';
+import { PinchPanMap } from '@/components/ui/pinch-pan-map';
 import { PlacementToast } from '@/components/game/placement-toast';
 import { PhaseHero, FadeSlideIn } from '@/components/game/phase-hero';
 import { ActionBar } from '@/components/game/action-bar';
@@ -81,9 +80,8 @@ function BoardExpandedOverlay({
   visible, onClose, boardState, boardRotation, debug, theme,
 }: BoardExpandedOverlayProps) {
   const { width, height } = useWindowDimensions();
-  const scrollRef  = useRef<ScrollView>(null);
-  const opacity    = useRef(new Animated.Value(0)).current;
-  const scale      = useRef(new Animated.Value(0.96)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale   = useRef(new Animated.Value(0.96)).current;
   const [mounted, setMounted] = useState(false);
 
   const mapSize = Math.min(width, height * 0.82);
@@ -107,11 +105,6 @@ function BoardExpandedOverlay({
     }
   }, [visible]);
 
-  const resetIfUnzoomed = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const s = e.nativeEvent.zoomScale ?? 1;
-    if (s <= 1.05) scrollRef.current?.scrollTo({ x: 0, y: 0, animated: false });
-  };
-
   if (!mounted) return null;
 
   return (
@@ -130,21 +123,11 @@ function BoardExpandedOverlay({
           </Pressable>
         </View>
 
-        {/* Zoomable map centred in remaining space */}
+        {/* Zoomable/pannable map — gesture area fills all available space */}
         <View style={em.mapArea}>
-          <ScrollView
-            ref={scrollRef}
-            style={{ width: mapSize, height: mapSize }}
-            contentContainerStyle={{ width: mapSize, height: mapSize }}
-            minimumZoomScale={1}
-            maximumZoomScale={3}
-            bouncesZoom
-            showsVerticalScrollIndicator={false}
-            showsHorizontalScrollIndicator={false}
-            centerContent
-            scrollsToTop={false}
-            onScrollEndDrag={resetIfUnzoomed}
-            onMomentumScrollEnd={resetIfUnzoomed}>
+          <PinchPanMap
+            size={mapSize}
+            containerStyle={em.pinchContainer}>
             <BoardMap
               tiles={boardState?.tiles ?? null}
               vertices={boardState?.vertices}
@@ -156,10 +139,7 @@ function BoardExpandedOverlay({
               showVertexIndices={debug.numberOverlay}
               showEdgeIndices={debug.numberOverlay}
             />
-          </ScrollView>
-          <Text style={[em.hint, { color: theme.textSecondary }]}>
-            Pinch to zoom · drag to pan
-          </Text>
+          </PinchPanMap>
         </View>
       </SafeAreaView>
     </Animated.View>
@@ -186,9 +166,14 @@ const em = StyleSheet.create({
     flex:           1,
     alignItems:     'center',
     justifyContent: 'center',
-    gap:            Spacing.two,
   },
-  hint: { fontSize: 11, fontWeight: '500' },
+  pinchContainer: {
+    flex:       1,
+    alignSelf:  'stretch',
+    overflow:   'hidden',
+    width:      undefined,
+    height:     undefined,
+  },
 });
 
 // ── Compact status row (PLAYING phase) ────────────────────────────────────────

@@ -20,6 +20,7 @@ import {
 
 import { useSettings } from '@/context/settings-context';
 import { BoardMap } from '@/components/ui/board-map';
+import { PinchPanMap } from '@/components/ui/pinch-pan-map';
 import type { useTheme } from '@/hooks/use-theme';
 
 import { Spacing } from '@/constants/theme';
@@ -431,17 +432,8 @@ function RobberMapModal({
             Tap a tile to place the robber there.
           </Text>
 
-          {/* Zoomable / pannable hex map */}
-          <ScrollView
-            style={{ width: mapSize, height: mapSize }}
-            contentContainerStyle={{ width: mapSize, height: mapSize }}
-            minimumZoomScale={1}
-            maximumZoomScale={3}
-            bouncesZoom
-            showsVerticalScrollIndicator={false}
-            showsHorizontalScrollIndicator={false}
-            centerContent
-            scrollsToTop={false}>
+          {/* Pinch-to-zoom / pan hex map — no UIScrollView */}
+          <PinchPanMap size={mapSize}>
             <BoardMap
               tiles={state.tiles}
               vertices={state.vertices}
@@ -455,7 +447,7 @@ function RobberMapModal({
               }
               showPorts={false}
             />
-          </ScrollView>
+          </PinchPanMap>
 
           <Text style={[s.robberHint, { color: theme.textSecondary }]}>
             Pinch to zoom · drag to pan
