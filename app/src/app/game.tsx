@@ -477,6 +477,7 @@ export default function GameScreen() {
     myTurn,
     hasRolled,
     connectedCount,
+    myId,
     (gameState?.trade?.fromPlayer ?? NO_PLAYER) !== NO_PLAYER,
   );
   const boardAvailable = (gameState?.tiles?.length ?? 0) > 0;

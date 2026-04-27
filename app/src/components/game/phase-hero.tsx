@@ -9,6 +9,7 @@ import Animated, {
 import { Spacing } from '@/constants/theme';
 import { DIE_FACES, REVEAL_ORDER } from '@/constants/game';
 import { GamePhase, NO_WINNER } from '@/services/proto';
+import { PLAYER_FILL } from '@/components/ui/board-map';
 import type { BoardState } from '@/services/proto';
 import type { useTheme } from '@/hooks/use-theme';
 
@@ -64,27 +65,31 @@ export function FadeSlideIn({ children, triggerKey }: {
 
 // ── LobbySlot ─────────────────────────────────────────────────────────────
 
+const PLAYER_TEXT: readonly string[] = ['#ffffff', '#ffffff', '#ffffff', '#1a1a1a'];
+
 function LobbySlot({ index, connected, isMe, theme }: {
   index: number;
   connected: boolean;
   isMe: boolean;
   theme: ReturnType<typeof useTheme>;
 }) {
+  const fillColor = PLAYER_FILL[index];
+  const textColor = connected ? PLAYER_TEXT[index] : theme.textSecondary;
   return (
     <View
       style={[
         s.lobbySlot,
         {
-          backgroundColor: connected ? theme.primary : theme.background,
-          borderColor: connected ? theme.primary : theme.textSecondary,
+          backgroundColor: connected ? fillColor : 'transparent',
+          borderColor: connected ? fillColor : theme.textSecondary,
         },
       ]}>
-      <Text style={[s.lobbySlotText, { color: connected ? '#fff' : theme.textSecondary }]}>
+      <Text style={[s.lobbySlotText, { color: textColor }]}>
         P{index + 1}
       </Text>
-      <Text style={[s.lobbySlotSub, { color: connected ? 'rgba(255,255,255,0.8)' : theme.textSecondary }]}>
-        {isMe ? 'you' : connected ? '●' : '○'}
-      </Text>
+      {isMe && (
+        <Text style={[s.lobbySlotSub, { color: textColor }]}>you</Text>
+      )}
     </View>
   );
 }
@@ -220,7 +225,7 @@ export function PhaseHero(p: HeroProps) {
             ))}
           </View>
           <Text style={[s.heroSub, { color: theme.textSecondary }]}>
-            {connectedCount} of 4 connected — need at least 1 to start
+            {connectedCount} of 4 connected
           </Text>
         </View>
       );

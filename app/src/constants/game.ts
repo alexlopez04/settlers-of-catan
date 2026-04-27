@@ -62,18 +62,15 @@ export function buttonsForPhase(
   myTurn: boolean,
   hasRolled: boolean,
   connectedCount: number,
+  myId: number,
   hasPendingTrade?: boolean,
 ): ButtonSpec[] {
   switch (phase) {
     case GamePhase.LOBBY: {
-      const canStart = connectedCount >= 1;
-      const btns: ButtonSpec[] = [
-        { label: 'Ready', sfSymbol: 'checkmark.circle', action: PlayerAction.READY, enabled: true },
+      if (myId !== 0) return [];
+      return [
+        { label: 'Start Game', sfSymbol: 'play.fill', action: PlayerAction.START_GAME, enabled: connectedCount >= 1, primary: true },
       ];
-      if (canStart) {
-        btns.push({ label: 'Start Game', sfSymbol: 'play.fill', action: PlayerAction.START_GAME, enabled: true, primary: true });
-      }
-      return btns;
     }
     case GamePhase.BOARD_SETUP:
       return [{ label: 'Start Reveal', sfSymbol: 'arrow.right.circle.fill', action: PlayerAction.NEXT_NUMBER, enabled: true, primary: true }];
