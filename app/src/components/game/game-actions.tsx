@@ -862,6 +862,8 @@ function TradeComposer({
 
   const adjustP2pGive = (i: number, dir: 1 | -1) => {
     setGive(prev => {
+      // Can't give a resource that is already in the want side.
+      if (dir > 0 && want[i] > 0) return prev;
       const next = prev.slice();
       next[i] = Math.max(0, Math.min(my[i], prev[i] + dir));
       return next;
@@ -870,6 +872,8 @@ function TradeComposer({
 
   const adjustP2pWant = (i: number, dir: 1 | -1) => {
     setWant(prev => {
+      // Can't want a resource that is already in the give side.
+      if (dir > 0 && give[i] > 0) return prev;
       const next = prev.slice();
       next[i] = Math.max(0, prev[i] + dir);
       return next;
@@ -1043,7 +1047,7 @@ function TradeComposer({
                       <Text style={[s.btnText, { color: theme.text }]}>−</Text>
                     </Pressable>
                     <Text style={[s.discardCount, { color: theme.text }]}>{give[i]}</Text>
-                    <Pressable disabled={give[i] >= my[i]} onPress={() => adjustP2pGive(i, 1)}
+                    <Pressable disabled={give[i] >= my[i] || want[i] > 0} onPress={() => adjustP2pGive(i, 1)}
                       style={[s.smallBtn, { backgroundColor: theme.background }]}>
                       <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
                     </Pressable>
@@ -1086,7 +1090,7 @@ function TradeComposer({
                       <Text style={[s.btnText, { color: theme.text }]}>−</Text>
                     </Pressable>
                     <Text style={[s.discardCount, { color: theme.text }]}>{want[i]}</Text>
-                    <Pressable onPress={() => adjustP2pWant(i, 1)}
+                    <Pressable disabled={give[i] > 0} onPress={() => adjustP2pWant(i, 1)}
                       style={[s.smallBtn, { backgroundColor: theme.background }]}>
                       <Text style={[s.btnText, { color: theme.text }]}>＋</Text>
                     </Pressable>
@@ -1153,10 +1157,10 @@ function TradeComposer({
                     <Text style={[s.btnText, { color: theme.text }]}>← Back</Text>
                   </Pressable>
                   <Pressable
-                    disabled={target === null}
+                    disabled={target === null || give.some((g, i) => g > 0 && want[i] > 0)}
                     onPress={submitP2P}
-                    style={[btnStyle(target !== null, theme), { flex: 1 }]}>
-                    <Text style={[s.btnText, { color: target !== null ? '#fff' : theme.textSecondary }]}>
+                    style={[btnStyle(target !== null && !give.some((g, i) => g > 0 && want[i] > 0), theme), { flex: 1 }]}>
+                    <Text style={[s.btnText, { color: target !== null && !give.some((g, i) => g > 0 && want[i] > 0) ? '#fff' : theme.textSecondary }]}>
                       Send Offer
                     </Text>
                   </Pressable>

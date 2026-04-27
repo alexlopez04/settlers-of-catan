@@ -520,6 +520,18 @@ static void onPlayerInput(const catan_PlayerInput& in) {
     else
         p.aux = 0xFF;
 
+    if (in.action == catan_PlayerAction_ACTION_TRADE_OFFER ||
+        in.action == catan_PlayerAction_ACTION_BANK_TRADE) {
+        LOGD("TRADE_DBG", "action=%u offer=[%u,%u,%u,%u,%u] want=[%u,%u,%u,%u,%u] target=%u phase=%s rolled=%d",
+             (unsigned)in.action,
+             (unsigned)p.res[0], (unsigned)p.res[1], (unsigned)p.res[2],
+             (unsigned)p.res[3], (unsigned)p.res[4],
+             (unsigned)p.want[0], (unsigned)p.want[1], (unsigned)p.want[2],
+             (unsigned)p.want[3], (unsigned)p.want[4],
+             (unsigned)p.target,
+             game::phaseName(game::phase()), (int)game::hasRolled());
+    }
+
     sm.handlePlayerAction(in.player_id, toActionKind(in.action), p);
 }
 

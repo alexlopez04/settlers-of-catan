@@ -243,6 +243,7 @@ RejectReason validateTradeOffer(uint8_t player,
                                 const uint8_t offer[5],
                                 const uint8_t want[5]) {
     if (player >= MAX_PLAYERS) return RejectReason::INVALID_INDEX;
+    if (game::phase() != GamePhase::PLAYING) return RejectReason::WRONG_PHASE;
     if (player != game::currentPlayer()) return RejectReason::OUT_OF_TURN;
     if (!game::hasRolled()) return RejectReason::WRONG_PHASE;
     uint8_t off_total = 0, want_total = 0;
