@@ -383,16 +383,76 @@ void getSlotClientIds(char out[MAX_PLAYERS][40]) {
 }
 
 void restoreSlotClientIds(const char ids[MAX_PLAYERS][40]) {
+    // Snapshot currently-connected devices before rebuilding the slot table,
+    // so that any device already seated (e.g. the one that just sent RESUME_YES)
+    // is moved to its correct saved slot rather than kept in slot 0.
+    struct ConnSnap {
+        bool     valid        = false;
+        uint16_t conn_handle  = NO_CONN;
+        char     client_id[CLIENT_ID_MAX] = {};
+    };
+    ConnSnap prev[MAX_PLAYERS];
+
+    struct RenotifyEntry { uint16_t conn_handle; uint8_t slot; };
+    RenotifyEntry renotify[MAX_PLAYERS] = {};
+    uint8_t renotify_count = 0;
+
     portENTER_CRITICAL(&g_slot_mux);
+
+    // 1. Snapshot currently-occupied slots.
     for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
-        // Only populate if the slot is currently unoccupied so we don't
-        // overwrite a live session (called right after game::init()).
-        if (!g_slots[i].occupied) {
-            strncpy(g_slots[i].client_id, ids[i], 39);
-            g_slots[i].client_id[39] = '\0';
+        if (g_slots[i].occupied) {
+            prev[i].valid = true;
+            prev[i].conn_handle = g_slots[i].conn_handle;
+            strncpy(prev[i].client_id, g_slots[i].client_id, CLIENT_ID_MAX - 1);
+            prev[i].client_id[CLIENT_ID_MAX - 1] = '\0';
         }
     }
+
+    // 2. Rebuild the slot table from saved IDs (all unoccupied).
+    for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+        g_slots[i].occupied    = false;
+        g_slots[i].conn_handle = NO_CONN;
+        strncpy(g_slots[i].client_id, ids[i], CLIENT_ID_MAX - 1);
+        g_slots[i].client_id[CLIENT_ID_MAX - 1] = '\0';
+    }
+
+    // 3. Re-seat each previously-connected device into its saved slot.
+    for (uint8_t j = 0; j < MAX_PLAYERS; ++j) {
+        if (!prev[j].valid) continue;
+        // Look up the saved slot for this device (table is already populated).
+        uint8_t new_slot = lookupSlotLocked(prev[j].client_id);
+        if (new_slot == NO_SLOT) {
+            // Device not in saved state — give it the first unclaimed slot.
+            for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+                if (!g_slots[i].occupied && g_slots[i].client_id[0] == '\0') {
+                    new_slot = i;
+                    strncpy(g_slots[i].client_id, prev[j].client_id, CLIENT_ID_MAX - 1);
+                    g_slots[i].client_id[CLIENT_ID_MAX - 1] = '\0';
+                    break;
+                }
+            }
+        }
+        if (new_slot == NO_SLOT) {
+            // Last resort: first unoccupied slot.
+            for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
+                if (!g_slots[i].occupied) { new_slot = i; break; }
+            }
+        }
+        if (new_slot != NO_SLOT && renotify_count < MAX_PLAYERS) {
+            g_slots[new_slot].occupied    = true;
+            g_slots[new_slot].conn_handle = prev[j].conn_handle;
+            renotify[renotify_count++] = { prev[j].conn_handle, new_slot };
+        }
+    }
+
+    g_presence_dirty.store(true, std::memory_order_relaxed);
     portEXIT_CRITICAL(&g_slot_mux);
+
+    // 4. Notify each re-seated device of its (possibly changed) slot number.
+    //    Must happen outside the critical section to avoid BLE blocking.
+    for (uint8_t k = 0; k < renotify_count; ++k)
+        notifySlot(renotify[k].conn_handle, renotify[k].slot);
 }
 
 }  // namespace comms
