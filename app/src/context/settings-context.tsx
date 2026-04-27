@@ -18,12 +18,12 @@ import { BoardRotation } from '@/utils/board-rotation';
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface DebugSettings {
-  /** Show vertex index numbers on the board map. */
-  vertexOverlay: boolean;
-  /** Show edge index numbers on the board map. */
-  edgeOverlay: boolean;
+  /** Show tile, vertex, and edge index numbers on the board map. */
+  numberOverlay: boolean;
   /** Show a "Simulated Board" option on the scan screen. */
   simulatedBoard: boolean;
+  /** Always offer the in-game tutorial, even if the player has already seen it. */
+  alwaysOfferTutorial: boolean;
 }
 
 interface SettingsContextValue {
@@ -37,9 +37,9 @@ interface SettingsContextValue {
 // ── Defaults & storage keys ──────────────────────────────────────────────────
 
 const DEFAULT_DEBUG: DebugSettings = {
-  vertexOverlay: false,
-  edgeOverlay:   false,
-  simulatedBoard: false,
+  numberOverlay:       false,
+  simulatedBoard:      false,
+  alwaysOfferTutorial: false,
 };
 
 const STORAGE_KEY_DEBUG    = 'catan_debug_settings';

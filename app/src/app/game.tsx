@@ -41,6 +41,8 @@ import { PhaseHero, FadeSlideIn } from '@/components/game/phase-hero';
 import { ActionBar } from '@/components/game/action-bar';
 import { LobbyOrientationPicker } from '@/components/game/lobby-orientation';
 import { LobbyDifficultyPicker } from '@/components/game/lobby-difficulty-picker';
+import { TutorialOverlay } from '@/components/game/tutorial-overlay';
+import { useTutorial, type TutorialStepId } from '@/context/tutorial-context';
 import {
   ResourcesPanel,
   StorePanel,
@@ -71,7 +73,7 @@ interface BoardExpandedOverlayProps {
   onClose: () => void;
   boardState: BoardState | null;
   boardRotation: BoardRotation;
-  debug: { vertexOverlay: boolean; edgeOverlay: boolean };
+  debug: { numberOverlay: boolean };
   theme: ReturnType<typeof useTheme>;
 }
 
@@ -151,8 +153,8 @@ function BoardExpandedOverlay({
               rotation={boardRotation}
               size={mapSize}
               showPorts
-              showVertexIndices={debug.vertexOverlay}
-              showEdgeIndices={debug.edgeOverlay}
+              showVertexIndices={debug.numberOverlay}
+              showEdgeIndices={debug.numberOverlay}
             />
           </ScrollView>
           <Text style={[em.hint, { color: theme.textSecondary }]}>
@@ -287,6 +289,28 @@ export default function GameScreen() {
   const [showBoardExpanded, setShowBoardExpanded] = useState(false);
   const [showDicePopup,     setShowDicePopup]     = useState(false);
   const [turnStartCards,    setTurnStartCards]    = useState<number[] | null>(null);
+
+  // ── Tutorial ──────────────────────────────────────────────────────────────
+  const { shouldShowStep, markStepSeen, skipAll: skipTutorial } = useTutorial();
+  const [activeTutorialStep, setActiveTutorialStep] = useState<TutorialStepId | null>(null);
+  const prevTutorialPhaseRef = useRef<GamePhase | null>(null);
+  const tutorialFirstRollRef = useRef(false);
+
+  const showTutorialStep = useCallback((id: TutorialStepId) => {
+    if (shouldShowStep(id)) setActiveTutorialStep(id);
+  }, [shouldShowStep]);
+
+  const handleTutorialDismiss = useCallback(() => {
+    setActiveTutorialStep(prev => {
+      if (prev) markStepSeen(prev);
+      return null;
+    });
+  }, [markStepSeen]);
+
+  const handleTutorialSkip = useCallback(() => {
+    skipTutorial();
+    setActiveTutorialStep(null);
+  }, [skipTutorial]);
   const prevDevCardsRef   = useRef<number[]>([]);
   const prevHasRolledRef  = useRef(false);
 
@@ -395,6 +419,49 @@ export default function GameScreen() {
   const myTurn        = gameState != null && currentPlayer === myId;
   const hasRolled     = gameState?.hasRolled ?? false;
   const isPlaying     = phase === GamePhase.PLAYING;
+
+  // ── Tutorial effects (placed after phase + hasRolled are declared) ────────
+
+  // Trigger a tutorial step on each phase transition.
+  useEffect(() => {
+    const prev = prevTutorialPhaseRef.current;
+    prevTutorialPhaseRef.current = phase;
+    if (prev === null) return; // skip initial mount
+    if (prev === phase) return;
+
+    // Reset first-roll tracker whenever we leave PLAYING.
+    if (phase !== GamePhase.PLAYING) tutorialFirstRollRef.current = false;
+
+    const phaseStepMap: Partial<Record<GamePhase, TutorialStepId>> = {
+      [GamePhase.LOBBY]:             'welcome',
+      [GamePhase.BOARD_SETUP]:       'board_setup',
+      [GamePhase.NUMBER_REVEAL]:     'number_reveal',
+      [GamePhase.INITIAL_PLACEMENT]: 'initial_placement',
+      [GamePhase.PLAYING]:           'first_roll',
+      [GamePhase.ROBBER]:            'robber',
+    };
+
+    const stepId = phaseStepMap[phase];
+    if (stepId) showTutorialStep(stepId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // "Build & Trade" step fires on the very first dice roll in a PLAYING phase.
+  useEffect(() => {
+    if (phase !== GamePhase.PLAYING) return;
+    if (!hasRolled) return;
+    if (tutorialFirstRollRef.current) return;
+    tutorialFirstRollRef.current = true;
+    // Delay slightly so the dice-roll popup can clear first.
+    const t = setTimeout(() => {
+      setActiveTutorialStep(prev => {
+        if (prev !== null) return prev;
+        return shouldShowStep('use_resources') ? 'use_resources' : null;
+      });
+    }, 300);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasRolled, phase]);
 
   const connectedMask  = gameState?.connectedMask ?? 0;
   const connectedCount = [0, 1, 2, 3].filter(i => Boolean(connectedMask & (1 << i))).length;
@@ -521,8 +588,8 @@ export default function GameScreen() {
                 rotation={boardRotation}
                 size={inlineMapSize}
                 showPorts
-                showVertexIndices={debug.vertexOverlay}
-                showEdgeIndices={debug.edgeOverlay}
+                showVertexIndices={debug.numberOverlay}
+                showEdgeIndices={debug.numberOverlay}
               />
               {/* Expand affordance badge */}
               <View style={s.expandBadge}>
@@ -635,6 +702,12 @@ export default function GameScreen() {
         die1={gameState?.die1 ?? 1}
         die2={gameState?.die2 ?? 1}
         onDismiss={() => setShowDicePopup(false)}
+        theme={theme}
+      />
+      <TutorialOverlay
+        stepId={activeTutorialStep}
+        onDismiss={handleTutorialDismiss}
+        onSkip={handleTutorialSkip}
         theme={theme}
       />
     </View>

@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DebugSettings, useSettings } from '@/context/settings-context';
+import { useTutorial } from '@/context/tutorial-context';
 import { Fonts, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { SFSymbolIcon } from '@/components/ui/symbol';
@@ -39,19 +40,19 @@ interface DebugToggleDef {
 
 const DEBUG_TOGGLES: DebugToggleDef[] = [
   {
-    key: 'vertexOverlay',
-    label: 'Vertex Number Overlay',
-    description: 'Show vertex indices on the board overview map.',
-  },
-  {
-    key: 'edgeOverlay',
-    label: 'Edge Number Overlay',
-    description: 'Show edge indices on the board overview map.',
+    key: 'numberOverlay',
+    label: 'Number Overlay',
+    description: 'Show tile, vertex, and edge index numbers on the board map.',
   },
   {
     key: 'simulatedBoard',
     label: 'Simulated Board',
     description: 'Show a "Simulated Board" option on the scan screen so all app functionality can be tested without hardware.',
+  },
+  {
+    key: 'alwaysOfferTutorial',
+    label: 'Always Offer Tutorial',
+    description: 'Show the in-game tutorial on every new game.',
   },
 ];
 
@@ -112,6 +113,7 @@ function Card({ children, theme }: { children: React.ReactNode; theme: Theme }) 
 export default function SettingsScreen() {
   const theme = useTheme();
   const { debug, setDebug } = useSettings();
+  const { reset: resetTutorial } = useTutorial();
 
   return (
     <View style={[s.root, { backgroundColor: theme.background }]}>
@@ -151,6 +153,19 @@ export default function SettingsScreen() {
                 />
               ))}
             </Card>
+            {/* Reset tutorial progress */}
+            <Pressable
+              onPress={resetTutorial}
+              style={({ pressed }) => [
+                s.resetBtn,
+                { backgroundColor: theme.backgroundElement, opacity: pressed ? 0.6 : 1 },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Reset tutorial progress">
+              <Text style={[s.resetBtnText, { color: theme.textSecondary }]}>
+                Reset Tutorial Progress
+              </Text>
+            </Pressable>
           </View>
 
           {/* ── About ────────────────────────────────────────────── */}
@@ -279,4 +294,12 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   publisher: { fontSize: 13 },
+
+  resetBtn: {
+    borderRadius: 12,
+    paddingVertical: Spacing.two + 2,
+    paddingHorizontal: Spacing.three,
+    alignItems: 'center',
+  },
+  resetBtnText: { fontSize: 14, fontWeight: '500' },
 });
