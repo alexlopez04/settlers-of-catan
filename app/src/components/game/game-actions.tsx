@@ -1256,12 +1256,15 @@ export function DiceRollPopup({
   visible,
   die1,
   die2,
+  resources,
   onDismiss,
   theme,
 }: {
   visible: boolean;
   die1: number;
   die2: number;
+  /** Length-5 array of resources gained this roll for the local player (may be all zeros). */
+  resources?: number[];
   onDismiss: () => void;
   theme: Theme;
 }) {
@@ -1369,6 +1372,19 @@ export function DiceRollPopup({
             ]}>
             <Text style={s.dicePopupTotalText}>{die1 + die2}</Text>
           </Animated.View>
+          {revealed && resources && resources.some(n => n > 0) && (
+            <View style={s.diceResourceRow}>
+              {RESOURCES.map((r, i) => resources[i] > 0 && (
+                <View key={r.key} style={[s.distChip, { backgroundColor: theme.background }]}>
+                  <Text style={s.distChipEmoji}>{r.emoji}</Text>
+                  <Text style={[s.distChipCount, { color: theme.text }]}>+{resources[i]}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          {revealed && resources && !resources.some(n => n > 0) && (
+            <Text style={[s.dicePopupNoRes, { color: theme.textSecondary }]}>No resources this roll</Text>
+          )}
           <Text style={[s.dicePopupHint, { color: theme.textSecondary }]}>Tap to dismiss</Text>
         </View>
       </Pressable>
@@ -1645,4 +1661,6 @@ const s = StyleSheet.create({
   },
   dicePopupTotalText: { fontSize: 40, fontWeight: '900', color: '#fff' },
   dicePopupHint: { fontSize: 11, fontWeight: '500' },
+  diceResourceRow: { flexDirection: 'row', gap: Spacing.one, flexWrap: 'wrap', justifyContent: 'center' },
+  dicePopupNoRes: { fontSize: 12, fontWeight: '500' },
 });

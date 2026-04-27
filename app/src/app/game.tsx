@@ -687,6 +687,7 @@ export default function GameScreen() {
         visible={showDicePopup}
         die1={gameState?.die1 ?? 1}
         die2={gameState?.die2 ?? 1}
+        resources={gameState?.lastDistribution.slice(myId * 5, myId * 5 + 5)}
         onDismiss={() => setShowDicePopup(false)}
         theme={theme}
       />
