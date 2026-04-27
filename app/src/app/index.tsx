@@ -3,9 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -19,75 +17,6 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { SFSymbolIcon } from '@/components/ui/symbol';
 
-// ── About modal ──────────────────────────────────────────────────────────────
-
-const TEAM_MEMBERS = [
-  { name: 'Alexander Lopez',  discipline: 'CmpE', hometown: 'Tampa, FL'         },
-  { name: 'Alyssa Nomura',    discipline: 'EE',   hometown: 'Houston, TX'        },
-  { name: 'Andrew Lemons',    discipline: 'CmpE', hometown: 'LaFayette, GA'      },
-  { name: 'Laura Huff',       discipline: 'EE',   hometown: 'Aiken, SC'          },
-  { name: 'Rashika Marpaung', discipline: 'EE',   hometown: 'Jakarta, Indonesia' },
-];
-
-function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const theme = useTheme();
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}>
-      <View style={[about.root, { backgroundColor: theme.background }]}>
-        <SafeAreaView style={about.safeArea} edges={['top', 'left', 'right']}>
-          <View style={[about.header, { borderBottomColor: theme.backgroundElement }]}>
-            <Text style={[about.title, { color: theme.text }]}>About</Text>
-            <Pressable onPress={onClose} hitSlop={12} style={about.closeBtn}>
-              <SFSymbolIcon name="xmark.circle.fill" size={28} color={theme.textSecondary} fallback="✕" />
-            </Pressable>
-          </View>
-          <ScrollView
-            style={about.scroll}
-            contentContainerStyle={about.scrollContent}
-            showsVerticalScrollIndicator={false}>
-            <Text style={[about.tagline, { color: theme.textSecondary }]}>
-              Developed for a Capstone Design project at{' '}
-              <Text style={[about.bold, { color: theme.text }]}>
-                The Georgia Institute of Technology
-              </Text>
-              , Spring 2026.
-            </Text>
-
-            <View style={[about.card, { backgroundColor: theme.backgroundElement }]}>
-              <Text style={[about.cardTitle, { color: theme.textSecondary }]}>TEAM MEMBERS</Text>
-              {TEAM_MEMBERS.map((m, i) => (
-                <View
-                  key={m.name}
-                  style={[
-                    about.memberRow,
-                    i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.background },
-                  ]}>
-                  <View style={about.memberLeft}>
-                    <Text style={[about.memberName, { color: theme.text }]}>{m.name}</Text>
-                    <Text style={[about.memberSub, { color: theme.textSecondary }]}>{m.hometown}</Text>
-                  </View>
-                  <View style={[about.disciplineBadge, { backgroundColor: theme.backgroundSelected }]}>
-                    <Text style={[about.disciplineText, { color: theme.primary }]}>{m.discipline}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-
-            <Text style={[about.publisher, { color: theme.textSecondary }]}>
-              Published by{' '}
-              <Text style={[about.bold, { color: theme.text }]}>Lemony Click, LLC.</Text>
-            </Text>
-          </ScrollView>
-        </SafeAreaView>
-      </View>
-    </Modal>
-  );
-}
-
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ScanScreen() {
@@ -96,7 +25,6 @@ export default function ScanScreen() {
   const { debug } = useSettings();
   const [connectingTo, setConnectingTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showAbout, setShowAbout] = useState(false);
 
   // Auto-scan when Bluetooth powers on.
   useEffect(() => {
@@ -241,14 +169,12 @@ export default function ScanScreen() {
             </Text>
           </View>
           <Pressable
-            onPress={() => setShowAbout(true)}
+            onPress={() => router.push('/rules')}
             hitSlop={12}
             style={({ pressed }) => [styles.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
-            <SFSymbolIcon name="info.circle" size={22} color={theme.textSecondary} fallback="ℹ️" />
+            <SFSymbolIcon name="book.closed" size={22} color={theme.textSecondary} fallback="📖" />
           </Pressable>
         </View>
-
-        <AboutModal visible={showAbout} onClose={() => setShowAbout(false)} />
 
         {bleBanner()}
 
@@ -345,58 +271,8 @@ export default function ScanScreen() {
 
 
 
-// ── About modal styles ────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-const about = StyleSheet.create({
-  root:     { flex: 1 },
-  safeArea: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.three,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  title:    { fontSize: 20, fontWeight: '700' },
-  closeBtn: { padding: 4 },
-  scroll:   { flex: 1 },
-  scrollContent: {
-    padding: Spacing.four,
-    gap: Spacing.four,
-    paddingBottom: Spacing.six,
-  },
-  tagline: { fontSize: 15, lineHeight: 22 },
-  bold:    { fontWeight: '700' },
-  card: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  cardTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
-    paddingBottom: Spacing.two,
-  },
-  memberRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two + 2,
-    gap: Spacing.two,
-  },
-  memberLeft:      { flex: 1 },
-  memberName:      { fontSize: 15, fontWeight: '600' },
-  memberSub:       { fontSize: 13, marginTop: 1 },
-  disciplineBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  disciplineText:  { fontSize: 13, fontWeight: '700' },
-  publisher:       { fontSize: 14, textAlign: 'center' },
-});
-
-// ── Remove duplicate styles below — they moved above ─────────────────────────
 const styles = StyleSheet.create({
   root:     { flex: 1 },
   safeArea: { flex: 1 },

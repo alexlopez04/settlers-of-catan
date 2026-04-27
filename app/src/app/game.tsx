@@ -350,18 +350,20 @@ export default function GameScreen() {
 
   useEffect(() => {
     if (!gameState) return;
-    if (gameState.currentPlayer === myId) {
-      setTurnStartCards(prev => {
-        if (prev !== null) return prev;
-        return gameState.devCards.slice(
-          myId * DEV_CARD_COUNT,
-          myId * DEV_CARD_COUNT + DEV_CARD_COUNT,
-        );
-      });
-    } else {
+    if (gameState.currentPlayer !== myId) {
       setTurnStartCards(null);
+      return;
     }
-  }, [gameState?.currentPlayer, gameState?.devCards, myId]);
+    // It's my turn. Refresh the snapshot only at turn-start (before rolling)
+    // so cards bought after rolling are detected as "new this turn". This
+    // also handles the 1-player simulator where currentPlayer never changes —
+    // END_TURN resets hasRolled to false, which triggers a fresh snapshot.
+    if (!gameState.hasRolled) {
+      setTurnStartCards(
+        gameState.devCards.slice(myId * DEV_CARD_COUNT, myId * DEV_CARD_COUNT + DEV_CARD_COUNT),
+      );
+    }
+  }, [gameState?.currentPlayer, gameState?.hasRolled, gameState?.devCards, myId]);
 
   useEffect(() => {
     if (!gameState) return;
@@ -475,6 +477,15 @@ export default function GameScreen() {
               </Text>
             </View>
           </View>
+          <View style={s.headerRight}>
+            <Pressable
+            onPress={() => router.push('/rules')}
+            hitSlop={12}
+            accessibilityLabel="View rules"
+            accessibilityRole="button"
+            style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
+            <SFSymbolIcon name="book.closed" size={22} color={theme.textSecondary} fallback="📖" />
+          </Pressable>
           <Pressable
             onPress={handleDisconnect}
             hitSlop={12}
@@ -483,6 +494,7 @@ export default function GameScreen() {
             style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
             <SFSymbolIcon name="xmark.circle" size={22} color={theme.textSecondary} fallback="✕" />
           </Pressable>
+          </View>
         </View>
 
         {/* ── Scrollable content ───────────────────────────────────────── */}
@@ -644,6 +656,7 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   playerAvatar: {
     width:          34,
     height:         34,

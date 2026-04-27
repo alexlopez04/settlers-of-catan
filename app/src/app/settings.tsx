@@ -11,9 +11,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DebugSettings, useSettings } from '@/context/settings-context';
-import { Spacing } from '@/constants/theme';
+import { Fonts, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { SFSymbolIcon } from '@/components/ui/symbol';
+
+// ── About data ────────────────────────────────────────────────────────────────
+
+const TEAM_MEMBERS = [
+  { name: 'Alexander Lopez',  discipline: 'CmpE', hometown: 'Tampa, FL'         },
+  { name: 'Alyssa Nomura',    discipline: 'EE',   hometown: 'Houston, TX'        },
+  { name: 'Andrew Lemons',    discipline: 'CmpE', hometown: 'LaFayette, GA'      },
+  { name: 'Laura Huff',       discipline: 'EE',   hometown: 'Aiken, SC'          },
+  { name: 'Rashika Marpaung', discipline: 'EE',   hometown: 'Jakarta, Indonesia' },
+];
 
 // ── Debug toggle definitions ──────────────────────────────────────────────────
 //
@@ -143,6 +153,46 @@ export default function SettingsScreen() {
             </Card>
           </View>
 
+          {/* ── About ────────────────────────────────────────────── */}
+          <View style={s.section}>
+            <SectionHeader title="ABOUT" theme={theme} />
+            <Card theme={theme}>
+              <View style={s.aboutTaglineRow}>
+                <Text style={[s.aboutTagline, { color: theme.textSecondary }]}>
+                  Developed for a Capstone Design project at{' '}
+                  <Text style={[s.aboutBold, { color: theme.text }]}>
+                    The Georgia Institute of Technology
+                  </Text>
+                  , Spring 2026.
+                </Text>
+              </View>
+              <Text style={[s.membersLabel, { color: theme.textSecondary, borderTopColor: theme.background }]}>
+                TEAM MEMBERS
+              </Text>
+              {TEAM_MEMBERS.map((m, i) => (
+                <View
+                  key={m.name}
+                  style={[
+                    s.memberRow,
+                  ]}>
+                  <View style={s.memberLeft}>
+                    <Text style={[s.memberName, { color: theme.text }]}>{m.name}</Text>
+                    <Text style={[s.memberSub, { color: theme.textSecondary }]}>{m.hometown}</Text>
+                  </View>
+                  <View style={[s.disciplineBadge, { backgroundColor: theme.backgroundSelected }]}>
+                    <Text style={[s.disciplineText, { color: theme.primary }]}>{m.discipline}</Text>
+                  </View>
+                </View>
+              ))}
+              <View style={[s.publisherRow, { borderTopColor: theme.background }]}>
+                <Text style={[s.publisher, { color: theme.textSecondary }]}>
+                  Published by{' '}
+                  <Text style={[s.aboutBold, { color: theme.text }]}>Lemony Click, LLC.</Text>
+                </Text>
+              </View>
+            </Card>
+          </View>
+
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -192,4 +242,41 @@ const s = StyleSheet.create({
   toggleText:  { flex: 1 },
   toggleLabel: { fontSize: 16 },
   toggleDesc:  { fontSize: 13, marginTop: 2 },
+
+  aboutTaglineRow: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+  },
+  aboutTagline: { fontSize: 14, lineHeight: 20 },
+  aboutBold:    { fontWeight: '700' },
+
+  membersLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.two,
+    paddingBottom: Spacing.two,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two + 2,
+    gap: Spacing.two,
+  },
+  memberLeft:      { flex: 1 },
+  memberName:      { fontSize: 15, fontWeight: '600' },
+  memberSub:       { fontSize: 13, marginTop: 1 },
+  disciplineBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  disciplineText:  { fontSize: 13, fontWeight: '700' },
+  publisherRow: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+  },
+  publisher: { fontSize: 13 },
 });

@@ -16,6 +16,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" />
             <Stack.Screen name="game" />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="rules" options={{ animation: 'slide_from_right' }} />
           </Stack>
         </BleProvider>
       </SettingsProvider>
