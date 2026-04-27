@@ -479,6 +479,8 @@ void StateMachine::onDiscard_(uint8_t player, const uint8_t counts[5]) {
     pushEffect_(EffectKind::DISCARD_COMPLETED, player, total_discarded);
     if (game::discardRequiredMask() == 0) {
         // Transition to ROBBER phase — current player places robber.
+        // Clear any leftover steal mask so the robber placement map shows first.
+        game::setStealEligibleMask(0);
         setPhase_(GamePhase::ROBBER);
     }
 }
@@ -575,6 +577,9 @@ void StateMachine::onPlayKnight_(uint8_t player) {
     pushEffect_(EffectKind::KNIGHT_PLAYED, player);
     recomputeAndEmitVp_();
     // Knight triggers robber move WITHOUT discard step.
+    // Clear any leftover steal mask so the app always shows the robber
+    // placement map first (not the steal picker from a previous turn).
+    game::setStealEligibleMask(0);
     setPhase_(GamePhase::ROBBER);
 }
 
@@ -652,6 +657,9 @@ void StateMachine::enterRobberOrDiscard_() {
         pushEffect_(EffectKind::DISCARD_REQUIRED, game::discardRequiredMask());
         setPhase_(GamePhase::DISCARD);
     } else {
+        // Clear any leftover steal mask so the app always shows the robber
+        // placement map first (not the steal picker from a previous turn).
+        game::setStealEligibleMask(0);
         setPhase_(GamePhase::ROBBER);
     }
 }
