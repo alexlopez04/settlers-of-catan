@@ -747,8 +747,10 @@ function decodeBoardStatePayload(buf: Uint8Array): BoardState | null {
         case 36: state.cardPlayedThisTurn = v !== 0; break;
         case 37: state.discardRequiredMask = v; break;
         case 39: state.stealEligibleMask = v; break;
-        case 50: state.trade.fromPlayer = v; break;
-        case 51: state.trade.toPlayer = v; break;
+        // trade_from_player / trade_to_player are 1-based on the wire
+        // (0 = absent / open offer) to avoid proto3 zero-suppression of player 0.
+        case 50: state.trade.fromPlayer = v === 0 ? NO_PLAYER : v - 1; break;
+        case 51: state.trade.toPlayer   = v === 0 ? NO_PLAYER : v - 1; break;
         case 62: state.difficulty = v as Difficulty; break;
         case 63: state.hasSavedGame = v !== 0; break;
       }

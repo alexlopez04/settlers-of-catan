@@ -668,8 +668,10 @@ static void broadcastBoardState() {
 
     {
         const auto& t = game::pendingTrade();
-        s.trade_from_player = (t.from == NO_PLAYER) ? 0xFF : t.from;
-        s.trade_to_player   = (t.to   == NO_PLAYER) ? 0xFF : t.to;
+        // Encode as 1-based (1..4) so that proto3 zero-suppression does not
+        // hide player 0 when they make an offer.  0 = no pending trade / open offer.
+        s.trade_from_player = (t.from == NO_PLAYER) ? 0u : (uint32_t)(t.from + 1u);
+        s.trade_to_player   = (t.to   == NO_PLAYER) ? 0u : (uint32_t)(t.to   + 1u);
         s.trade_offer.size  = 5;
         s.trade_want.size   = 5;
         for (uint8_t i = 0; i < 5; ++i) {
