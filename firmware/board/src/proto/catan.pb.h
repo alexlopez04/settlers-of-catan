@@ -10,76 +10,236 @@
 #endif
 
 /* Enum definitions */
-typedef enum _catan_MsgType {
-    catan_MsgType_MSG_NONE = 0,
-    /* Central → Player */
-    catan_MsgType_MSG_GAME_STATE = 1, /* Full state sync (sent every cycle) */
-    catan_MsgType_MSG_DICE_RESULT = 2, /* Dice result notification */
-    catan_MsgType_MSG_PROMPT = 3, /* Display prompt with button labels */
-    /* Player → Central */
-    catan_MsgType_MSG_BUTTON_EVENT = 10, /* A button was pressed */
-    catan_MsgType_MSG_PLAYER_READY = 11 /* Station is alive (response to poll) */
-} catan_MsgType;
-
 typedef enum _catan_GamePhase {
-    catan_GamePhase_PHASE_WAITING_FOR_PLAYERS = 0,
+    catan_GamePhase_PHASE_LOBBY = 0,
     catan_GamePhase_PHASE_BOARD_SETUP = 1,
     catan_GamePhase_PHASE_NUMBER_REVEAL = 2,
-    catan_GamePhase_PHASE_INITIAL_PLACEMENT = 3, /* Setup rounds: place settlements + roads */
-    catan_GamePhase_PHASE_PLAYING = 4, /* Main game loop */
-    catan_GamePhase_PHASE_ROBBER = 5, /* Must move robber (rolled 7) */
-    catan_GamePhase_PHASE_TRADE = 6, /* Port/bank trading */
+    catan_GamePhase_PHASE_INITIAL_PLACEMENT = 3,
+    catan_GamePhase_PHASE_PLAYING = 4,
+    catan_GamePhase_PHASE_ROBBER = 5, /* active player must move robber + (optionally) steal */
+    catan_GamePhase_PHASE_DISCARD = 6, /* one or more players must discard down to 7 cards */
     catan_GamePhase_PHASE_GAME_OVER = 7
 } catan_GamePhase;
 
-typedef enum _catan_ButtonId {
-    catan_ButtonId_BTN_NONE = 0,
-    catan_ButtonId_BTN_LEFT = 1,
-    catan_ButtonId_BTN_CENTER = 2,
-    catan_ButtonId_BTN_RIGHT = 3
-} catan_ButtonId;
+typedef enum _catan_PlayerAction {
+    catan_PlayerAction_ACTION_NONE = 0,
+    catan_PlayerAction_ACTION_READY = 1,
+    catan_PlayerAction_ACTION_START_GAME = 2,
+    catan_PlayerAction_ACTION_NEXT_NUMBER = 3,
+    catan_PlayerAction_ACTION_PLACE_DONE = 4,
+    catan_PlayerAction_ACTION_ROLL_DICE = 5,
+    catan_PlayerAction_ACTION_END_TURN = 6,
+    catan_PlayerAction_ACTION_SKIP_ROBBER = 7, /* legacy: skip-steal after robber move when no targets */
+    /* ── Purchases ──────────────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_BUY_ROAD = 10,
+    catan_PlayerAction_ACTION_BUY_SETTLEMENT = 11,
+    catan_PlayerAction_ACTION_BUY_CITY = 12,
+    catan_PlayerAction_ACTION_BUY_DEV_CARD = 13,
+    /* ── Robber + Discard ───────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_PLACE_ROBBER = 14, /* payload: robber_tile */
+    catan_PlayerAction_ACTION_STEAL_FROM = 15, /* payload: target_player */
+    catan_PlayerAction_ACTION_DISCARD = 16, /* payload: res_lumber..res_ore (counts) */
+    /* ── Trade ──────────────────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_BANK_TRADE = 17, /* payload: res_lumber..ore (give), want_lumber..ore (get) */
+    catan_PlayerAction_ACTION_TRADE_OFFER = 18, /* payload: target_player + offer/want */
+    catan_PlayerAction_ACTION_TRADE_ACCEPT = 19,
+    catan_PlayerAction_ACTION_TRADE_DECLINE = 20,
+    catan_PlayerAction_ACTION_TRADE_CANCEL = 21, /* current player retracts an open offer */
+    /* ── Development cards ──────────────────────────────────────────────────── */
+    catan_PlayerAction_ACTION_PLAY_KNIGHT = 22,
+    catan_PlayerAction_ACTION_PLAY_ROAD_BUILDING = 23,
+    catan_PlayerAction_ACTION_PLAY_YEAR_OF_PLENTY = 24, /* payload: card_res_1, card_res_2 (resource indices) */
+    catan_PlayerAction_ACTION_PLAY_MONOPOLY = 25, /* payload: monopoly_res */
+    /* Lobby-only: Player 0 selects board difficulty.
+       payload: monopoly_res carries the Difficulty value (0..3). */
+    catan_PlayerAction_ACTION_SET_DIFFICULTY = 26,
+    /* Sent in response to the resume-game dialog (LOBBY phase only). */
+    catan_PlayerAction_ACTION_RESUME_YES = 27,
+    catan_PlayerAction_ACTION_RESUME_NO = 28
+} catan_PlayerAction;
+
+/* Resource type (also used as index into per-player count arrays):
+   0 = LUMBER, 1 = WOOL, 2 = GRAIN, 3 = BRICK, 4 = ORE */
+typedef enum _catan_ResourceType {
+    catan_ResourceType_RES_LUMBER = 0,
+    catan_ResourceType_RES_WOOL = 1,
+    catan_ResourceType_RES_GRAIN = 2,
+    catan_ResourceType_RES_BRICK = 3,
+    catan_ResourceType_RES_ORE = 4
+} catan_ResourceType;
+
+/* Development card type (also used as index into dev_cards arrays):
+   0 = KNIGHT, 1 = VP, 2 = ROAD_BUILDING, 3 = YEAR_OF_PLENTY, 4 = MONOPOLY */
+typedef enum _catan_DevCardType {
+    catan_DevCardType_DEV_KNIGHT = 0,
+    catan_DevCardType_DEV_VP = 1,
+    catan_DevCardType_DEV_ROAD_BUILDING = 2,
+    catan_DevCardType_DEV_YEAR_OF_PLENTY = 3,
+    catan_DevCardType_DEV_MONOPOLY = 4
+} catan_DevCardType;
 
 /* Struct definitions */
-typedef struct _catan_BoardToPlayer {
-    catan_MsgType type;
+typedef PB_BYTES_ARRAY_T(19) catan_BoardState_tiles_packed_t;
+typedef PB_BYTES_ARRAY_T(27) catan_BoardState_vertex_owners_t;
+typedef PB_BYTES_ARRAY_T(36) catan_BoardState_edge_owners_t;
+typedef PB_BYTES_ARRAY_T(20) catan_BoardState_dev_cards_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_knights_played_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_discard_required_count_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_pending_road_buy_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_pending_settlement_buy_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_pending_city_buy_t;
+typedef PB_BYTES_ARRAY_T(4) catan_BoardState_free_roads_remaining_t;
+typedef PB_BYTES_ARRAY_T(5) catan_BoardState_trade_offer_t;
+typedef PB_BYTES_ARRAY_T(5) catan_BoardState_trade_want_t;
+typedef PB_BYTES_ARRAY_T(5) catan_BoardState_bank_supply_t;
+typedef PB_BYTES_ARRAY_T(20) catan_BoardState_last_distribution_t;
+typedef struct _catan_BoardState {
+    uint32_t proto_version;
     catan_GamePhase phase;
-    uint32_t current_player; /* 0-based index of whose turn it is */
     uint32_t num_players;
-    uint32_t your_player_id; /* 0-based index assigned to this station */
-    /* Dice */
+    uint32_t current_player;
+    uint32_t setup_round;
+    bool has_rolled;
     uint32_t die1;
     uint32_t die2;
-    uint32_t dice_total;
-    /* Number-reveal phase */
     uint32_t reveal_number;
-    /* Display strings (rendered on the OLED) */
-    char line1[22];
-    char line2[22];
-    char btn_left[8];
-    char btn_center[8];
-    char btn_right[8];
-    /* Victory points per player slot (index 0-3) */
-    uint32_t vp0;
-    uint32_t vp1;
-    uint32_t vp2;
-    uint32_t vp3;
-    /* Resources for the receiving player */
+    uint32_t winner_id; /* 0xFF if no winner yet */
+    uint32_t robber_tile; /* 0xFF if unplaced */
+    uint32_t connected_mask; /* bit i set => player i has a phone connected */
+    catan_BoardState_tiles_packed_t tiles_packed; /* 19 bytes, one per tile (high nibble biome, low nibble number) */
+    pb_size_t vp_count;
+    uint32_t vp[4]; /* PUBLIC VP per player (settlements + cities + LR + LA), */
+    /* hidden VP dev cards excluded until game ends. */
+    pb_size_t ready_count;
+    uint32_t ready[4]; /* 0/1 ready flag per player slot, max 4 */
+    /* Settlements / cities per vertex (54 vertices, packed as 27 bytes).
+   low nibble  = vertex 2*i     high nibble = vertex 2*i + 1
+   nibble value:
+     0x0..0x3 = settlement owned by player 0..3
+     0x4..0x7 = city       owned by player 0..3 (owner = nibble & 0x3)
+     0xF      = empty
+ The final nibble (index 54) is unused and is always 0xF. */
+    catan_BoardState_vertex_owners_t vertex_owners;
+    /* Roads per edge (72 edges, packed as 36 bytes).
+   low nibble  = edge 2*i     high nibble = edge 2*i + 1
+   nibble value:
+     0x0..0x3 = road owned by player 0..3
+     0xF      = empty */
+    catan_BoardState_edge_owners_t edge_owners;
+    /* Resource counts per player. Index = player id; length = 4. */
+    pb_size_t res_lumber_count;
+    uint32_t res_lumber[4];
+    pb_size_t res_wool_count;
+    uint32_t res_wool[4];
+    pb_size_t res_grain_count;
+    uint32_t res_grain[4];
+    pb_size_t res_brick_count;
+    uint32_t res_brick[4];
+    pb_size_t res_ore_count;
+    uint32_t res_ore[4];
+    /* Last placement / action rejection code for the current player.
+ 0 = no rejection; set for exactly one broadcast cycle then cleared by
+ the board. Mirrors firmware RejectReason — see catan.proto enum doc. */
+    uint32_t last_reject_reason;
+    /* ── Development cards (server-authoritative) ─────────────────────────────
+ Per-player inventory packed as 5 bytes per player (one byte per type)
+ in player-major order: [P0 K,VP,RB,YoP,Mono, P1 ..., P2 ..., P3 ...].
+ Total 20 bytes. */
+    catan_BoardState_dev_cards_t dev_cards;
+    /* Knights played per player (4 bytes). */
+    catan_BoardState_knights_played_t knights_played;
+    /* Player holding Largest Army (≥3 knights), or 0xFF if none. */
+    uint32_t largest_army_player;
+    /* Player holding Longest Road (≥5 connected roads), or 0xFF if none. */
+    uint32_t longest_road_player;
+    /* Length of the current Longest Road title-holding chain (0 if none). */
+    uint32_t longest_road_length;
+    /* Cards left in the dev card deck (0..25). */
+    uint32_t dev_deck_remaining;
+    /* True if the current player has already played a dev card this turn. */
+    bool card_played_this_turn;
+    /* ── Robber + Discard ─────────────────────────────────────────────────────
+ Bitmask of players who must discard before the robber can be moved.
+ Set when dice rolls 7 and any player has > 7 cards. A player exits
+ the mask by sending ACTION_DISCARD with valid counts. When the mask
+ hits 0 the FSM transitions to PHASE_ROBBER. */
+    uint32_t discard_required_mask;
+    /* Discard amount per player (the number of cards each must discard).
+ 4 bytes; 0 for players not in `discard_required_mask`. */
+    catan_BoardState_discard_required_count_t discard_required_count;
+    /* After PLACE_ROBBER, bitmask of players adjacent to the new robber tile
+ who hold ≥1 resource — these are the candidates for ACTION_STEAL_FROM.
+ 0 means no one is eligible; the FSM exits robber phase automatically. */
+    uint32_t steal_eligible_mask;
+    /* ── Pending purchases ────────────────────────────────────────────────────
+ Pending purchase counters per player. Each 4-byte field stores a per
+ player count — when > 0, the player has prepaid for that piece type
+ and the next valid placement consumes one credit. */
+    catan_BoardState_pending_road_buy_t pending_road_buy; /* 4 bytes */
+    catan_BoardState_pending_settlement_buy_t pending_settlement_buy; /* 4 bytes */
+    catan_BoardState_pending_city_buy_t pending_city_buy; /* 4 bytes */
+    /* Free roads remaining from a Road Building card (per player, 4 bytes). */
+    catan_BoardState_free_roads_remaining_t free_roads_remaining;
+    /* ── Trade (one pending offer at a time) ────────────────────────────────── */
+    uint32_t trade_from_player; /* 0xFF if no pending trade */
+    uint32_t trade_to_player; /* 0xFF = open offer to all opponents */
+    catan_BoardState_trade_offer_t trade_offer; /* 5 bytes — counts of L,W,G,B,O the offerer gives */
+    catan_BoardState_trade_want_t trade_want; /* 5 bytes — counts of L,W,G,B,O the offerer wants */
+    /* Bank supply per resource (5 bytes: L,W,G,B,O). */
+    catan_BoardState_bank_supply_t bank_supply;
+    /* Resources just distributed for the current dice roll. Set for one
+ broadcast cycle after a non-7 roll completes distribution. 20 bytes
+ in player-major order, one byte per (player, resource) — same layout
+ as `dev_cards`. All zero outside the distribution broadcast. */
+    catan_BoardState_last_distribution_t last_distribution;
+    /* Board generation difficulty selected by Player 0 in the lobby.
+ 0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT.
+ has_difficulty is always set true so the field is encoded even when
+ the value is 0 (EASY), which proto3 would otherwise omit. */
+    bool has_difficulty;
+    uint32_t difficulty;
+    /* True when a saved game from a previous session is available for resume.
+ Cleared once the first player responds with RESUME_YES or RESUME_NO. */
+    bool has_saved_game;
+} catan_BoardState;
+
+typedef struct _catan_PlayerInput {
+    uint32_t proto_version;
+    uint32_t player_id;
+    catan_PlayerAction action;
+    /* Optional stable identifier of the originating mobile device. The board
+ re-stamps every input with the authoritative player_id derived from
+ the BLE connection slot, so client_id is informational only (used for
+ diagnostics and seat persistence within a power session). */
+    char client_id[40];
+    /* Generic resource payload — used by:
+   ACTION_DISCARD       — counts to discard
+   ACTION_BANK_TRADE    — counts to give
+   ACTION_TRADE_OFFER   — counts the offerer is giving
+   ACTION_PLAY_YEAR_OF_PLENTY (legacy alt: see card_res_*) */
     uint32_t res_lumber;
     uint32_t res_wool;
     uint32_t res_grain;
     uint32_t res_brick;
     uint32_t res_ore;
-    /* End-of-game */
-    uint32_t winner_id;
-    /* Setup round tracking */
-    uint32_t setup_round; /* 1 or 2 during initial placement */
-    bool has_rolled; /* true if current player already rolled */
-} catan_BoardToPlayer;
-
-typedef struct _catan_PlayerToBoard {
-    catan_MsgType type;
-    catan_ButtonId button;
-} catan_PlayerToBoard;
+    /* "Wanted" resource payload — used by:
+   ACTION_BANK_TRADE    — counts to receive
+   ACTION_TRADE_OFFER   — counts the offerer wants */
+    uint32_t want_lumber;
+    uint32_t want_wool;
+    uint32_t want_grain;
+    uint32_t want_brick;
+    uint32_t want_ore;
+    /* ACTION_PLACE_ROBBER — destination tile (0..18). */
+    uint32_t robber_tile;
+    /* ACTION_STEAL_FROM, ACTION_TRADE_OFFER — target player (0..3, 0xFF for open offer). */
+    uint32_t target_player;
+    /* ACTION_PLAY_MONOPOLY — resource index to monopolize (0..4). */
+    uint32_t monopoly_res;
+    /* ACTION_PLAY_YEAR_OF_PLENTY — two chosen resource indices (0..4). */
+    uint32_t card_res_1;
+    uint32_t card_res_2;
+} catan_PlayerInput;
 
 
 #ifdef __cplusplus
@@ -87,109 +247,183 @@ extern "C" {
 #endif
 
 /* Helper constants for enums */
-#define _catan_MsgType_MIN catan_MsgType_MSG_NONE
-#define _catan_MsgType_MAX catan_MsgType_MSG_PLAYER_READY
-#define _catan_MsgType_ARRAYSIZE ((catan_MsgType)(catan_MsgType_MSG_PLAYER_READY+1))
-
-#define _catan_GamePhase_MIN catan_GamePhase_PHASE_WAITING_FOR_PLAYERS
+#define _catan_GamePhase_MIN catan_GamePhase_PHASE_LOBBY
 #define _catan_GamePhase_MAX catan_GamePhase_PHASE_GAME_OVER
 #define _catan_GamePhase_ARRAYSIZE ((catan_GamePhase)(catan_GamePhase_PHASE_GAME_OVER+1))
 
-#define _catan_ButtonId_MIN catan_ButtonId_BTN_NONE
-#define _catan_ButtonId_MAX catan_ButtonId_BTN_RIGHT
-#define _catan_ButtonId_ARRAYSIZE ((catan_ButtonId)(catan_ButtonId_BTN_RIGHT+1))
+#define _catan_PlayerAction_MIN catan_PlayerAction_ACTION_NONE
+#define _catan_PlayerAction_MAX catan_PlayerAction_ACTION_RESUME_NO
+#define _catan_PlayerAction_ARRAYSIZE ((catan_PlayerAction)(catan_PlayerAction_ACTION_RESUME_NO+1))
 
-#define catan_BoardToPlayer_type_ENUMTYPE catan_MsgType
-#define catan_BoardToPlayer_phase_ENUMTYPE catan_GamePhase
+#define _catan_ResourceType_MIN catan_ResourceType_RES_LUMBER
+#define _catan_ResourceType_MAX catan_ResourceType_RES_ORE
+#define _catan_ResourceType_ARRAYSIZE ((catan_ResourceType)(catan_ResourceType_RES_ORE+1))
 
-#define catan_PlayerToBoard_type_ENUMTYPE catan_MsgType
-#define catan_PlayerToBoard_button_ENUMTYPE catan_ButtonId
+#define _catan_DevCardType_MIN catan_DevCardType_DEV_KNIGHT
+#define _catan_DevCardType_MAX catan_DevCardType_DEV_MONOPOLY
+#define _catan_DevCardType_ARRAYSIZE ((catan_DevCardType)(catan_DevCardType_DEV_MONOPOLY+1))
+
+#define catan_BoardState_phase_ENUMTYPE catan_GamePhase
+
+#define catan_PlayerInput_action_ENUMTYPE catan_PlayerAction
 
 
 /* Initializer values for message structs */
-#define catan_BoardToPlayer_init_default         {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerToBoard_init_default         {_catan_MsgType_MIN, _catan_ButtonId_MIN}
-#define catan_BoardToPlayer_init_zero            {_catan_MsgType_MIN, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define catan_PlayerToBoard_init_zero            {_catan_MsgType_MIN, _catan_ButtonId_MIN}
+#define catan_BoardState_init_default            {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0, false}
+#define catan_PlayerInput_init_default           {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define catan_BoardState_init_zero               {0, _catan_GamePhase_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, {0, {0}}, {0, {0}}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, 0, 0, 0}, 0, {0, {0}}, {0, {0}}, 0, 0, 0, 0, 0, 0, {0, {0}}, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, 0, 0, {0, {0}}, {0, {0}}, {0, {0}}, {0, {0}}, false, 0, false}
+#define catan_PlayerInput_init_zero              {0, 0, _catan_PlayerAction_MIN, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
-#define catan_BoardToPlayer_type_tag             1
-#define catan_BoardToPlayer_phase_tag            2
-#define catan_BoardToPlayer_current_player_tag   3
-#define catan_BoardToPlayer_num_players_tag      4
-#define catan_BoardToPlayer_your_player_id_tag   5
-#define catan_BoardToPlayer_die1_tag             6
-#define catan_BoardToPlayer_die2_tag             7
-#define catan_BoardToPlayer_dice_total_tag       8
-#define catan_BoardToPlayer_reveal_number_tag    9
-#define catan_BoardToPlayer_line1_tag            10
-#define catan_BoardToPlayer_line2_tag            11
-#define catan_BoardToPlayer_btn_left_tag         12
-#define catan_BoardToPlayer_btn_center_tag       13
-#define catan_BoardToPlayer_btn_right_tag        14
-#define catan_BoardToPlayer_vp0_tag              15
-#define catan_BoardToPlayer_vp1_tag              16
-#define catan_BoardToPlayer_vp2_tag              17
-#define catan_BoardToPlayer_vp3_tag              18
-#define catan_BoardToPlayer_res_lumber_tag       19
-#define catan_BoardToPlayer_res_wool_tag         20
-#define catan_BoardToPlayer_res_grain_tag        21
-#define catan_BoardToPlayer_res_brick_tag        22
-#define catan_BoardToPlayer_res_ore_tag          23
-#define catan_BoardToPlayer_winner_id_tag        24
-#define catan_BoardToPlayer_setup_round_tag      25
-#define catan_BoardToPlayer_has_rolled_tag       26
-#define catan_PlayerToBoard_type_tag             1
-#define catan_PlayerToBoard_button_tag           2
+#define catan_BoardState_proto_version_tag       1
+#define catan_BoardState_phase_tag               2
+#define catan_BoardState_num_players_tag         3
+#define catan_BoardState_current_player_tag      4
+#define catan_BoardState_setup_round_tag         5
+#define catan_BoardState_has_rolled_tag          6
+#define catan_BoardState_die1_tag                7
+#define catan_BoardState_die2_tag                8
+#define catan_BoardState_reveal_number_tag       9
+#define catan_BoardState_winner_id_tag           10
+#define catan_BoardState_robber_tile_tag         11
+#define catan_BoardState_connected_mask_tag      12
+#define catan_BoardState_tiles_packed_tag        13
+#define catan_BoardState_vp_tag                  14
+#define catan_BoardState_ready_tag               15
+#define catan_BoardState_vertex_owners_tag       16
+#define catan_BoardState_edge_owners_tag         17
+#define catan_BoardState_res_lumber_tag          20
+#define catan_BoardState_res_wool_tag            21
+#define catan_BoardState_res_grain_tag           22
+#define catan_BoardState_res_brick_tag           23
+#define catan_BoardState_res_ore_tag             24
+#define catan_BoardState_last_reject_reason_tag  25
+#define catan_BoardState_dev_cards_tag           30
+#define catan_BoardState_knights_played_tag      31
+#define catan_BoardState_largest_army_player_tag 32
+#define catan_BoardState_longest_road_player_tag 33
+#define catan_BoardState_longest_road_length_tag 34
+#define catan_BoardState_dev_deck_remaining_tag  35
+#define catan_BoardState_card_played_this_turn_tag 36
+#define catan_BoardState_discard_required_mask_tag 37
+#define catan_BoardState_discard_required_count_tag 38
+#define catan_BoardState_steal_eligible_mask_tag 39
+#define catan_BoardState_pending_road_buy_tag    40
+#define catan_BoardState_pending_settlement_buy_tag 41
+#define catan_BoardState_pending_city_buy_tag    42
+#define catan_BoardState_free_roads_remaining_tag 43
+#define catan_BoardState_trade_from_player_tag   50
+#define catan_BoardState_trade_to_player_tag     51
+#define catan_BoardState_trade_offer_tag         52
+#define catan_BoardState_trade_want_tag          53
+#define catan_BoardState_bank_supply_tag         60
+#define catan_BoardState_last_distribution_tag   61
+#define catan_BoardState_difficulty_tag           62
+#define catan_BoardState_has_saved_game_tag        63
+#define catan_PlayerInput_proto_version_tag      1
+#define catan_PlayerInput_player_id_tag          2
+#define catan_PlayerInput_action_tag             3
+#define catan_PlayerInput_client_id_tag          4
+#define catan_PlayerInput_res_lumber_tag         11
+#define catan_PlayerInput_res_wool_tag           12
+#define catan_PlayerInput_res_grain_tag          13
+#define catan_PlayerInput_res_brick_tag          14
+#define catan_PlayerInput_res_ore_tag            15
+#define catan_PlayerInput_want_lumber_tag        16
+#define catan_PlayerInput_want_wool_tag          17
+#define catan_PlayerInput_want_grain_tag         18
+#define catan_PlayerInput_want_brick_tag         19
+#define catan_PlayerInput_want_ore_tag           20
+#define catan_PlayerInput_robber_tile_tag        21
+#define catan_PlayerInput_target_player_tag      22
+#define catan_PlayerInput_monopoly_res_tag       23
+#define catan_PlayerInput_card_res_1_tag         24
+#define catan_PlayerInput_card_res_2_tag         25
 
 /* Struct field encoding specification for nanopb */
-#define catan_BoardToPlayer_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UENUM,    type,              1) \
+#define catan_BoardState_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   proto_version,     1) \
 X(a, STATIC,   SINGULAR, UENUM,    phase,             2) \
-X(a, STATIC,   SINGULAR, UINT32,   current_player,    3) \
-X(a, STATIC,   SINGULAR, UINT32,   num_players,       4) \
-X(a, STATIC,   SINGULAR, UINT32,   your_player_id,    5) \
-X(a, STATIC,   SINGULAR, UINT32,   die1,              6) \
-X(a, STATIC,   SINGULAR, UINT32,   die2,              7) \
-X(a, STATIC,   SINGULAR, UINT32,   dice_total,        8) \
+X(a, STATIC,   SINGULAR, UINT32,   num_players,       3) \
+X(a, STATIC,   SINGULAR, UINT32,   current_player,    4) \
+X(a, STATIC,   SINGULAR, UINT32,   setup_round,       5) \
+X(a, STATIC,   SINGULAR, BOOL,     has_rolled,        6) \
+X(a, STATIC,   SINGULAR, UINT32,   die1,              7) \
+X(a, STATIC,   SINGULAR, UINT32,   die2,              8) \
 X(a, STATIC,   SINGULAR, UINT32,   reveal_number,     9) \
-X(a, STATIC,   SINGULAR, STRING,   line1,            10) \
-X(a, STATIC,   SINGULAR, STRING,   line2,            11) \
-X(a, STATIC,   SINGULAR, STRING,   btn_left,         12) \
-X(a, STATIC,   SINGULAR, STRING,   btn_center,       13) \
-X(a, STATIC,   SINGULAR, STRING,   btn_right,        14) \
-X(a, STATIC,   SINGULAR, UINT32,   vp0,              15) \
-X(a, STATIC,   SINGULAR, UINT32,   vp1,              16) \
-X(a, STATIC,   SINGULAR, UINT32,   vp2,              17) \
-X(a, STATIC,   SINGULAR, UINT32,   vp3,              18) \
-X(a, STATIC,   SINGULAR, UINT32,   res_lumber,       19) \
-X(a, STATIC,   SINGULAR, UINT32,   res_wool,         20) \
-X(a, STATIC,   SINGULAR, UINT32,   res_grain,        21) \
-X(a, STATIC,   SINGULAR, UINT32,   res_brick,        22) \
-X(a, STATIC,   SINGULAR, UINT32,   res_ore,          23) \
-X(a, STATIC,   SINGULAR, UINT32,   winner_id,        24) \
-X(a, STATIC,   SINGULAR, UINT32,   setup_round,      25) \
-X(a, STATIC,   SINGULAR, BOOL,     has_rolled,       26)
-#define catan_BoardToPlayer_CALLBACK NULL
-#define catan_BoardToPlayer_DEFAULT NULL
+X(a, STATIC,   SINGULAR, UINT32,   winner_id,        10) \
+X(a, STATIC,   SINGULAR, UINT32,   robber_tile,      11) \
+X(a, STATIC,   SINGULAR, UINT32,   connected_mask,   12) \
+X(a, STATIC,   SINGULAR, BYTES,    tiles_packed,     13) \
+X(a, STATIC,   REPEATED, UINT32,   vp,               14) \
+X(a, STATIC,   REPEATED, UINT32,   ready,            15) \
+X(a, STATIC,   SINGULAR, BYTES,    vertex_owners,    16) \
+X(a, STATIC,   SINGULAR, BYTES,    edge_owners,      17) \
+X(a, STATIC,   REPEATED, UINT32,   res_lumber,       20) \
+X(a, STATIC,   REPEATED, UINT32,   res_wool,         21) \
+X(a, STATIC,   REPEATED, UINT32,   res_grain,        22) \
+X(a, STATIC,   REPEATED, UINT32,   res_brick,        23) \
+X(a, STATIC,   REPEATED, UINT32,   res_ore,          24) \
+X(a, STATIC,   SINGULAR, UINT32,   last_reject_reason,  25) \
+X(a, STATIC,   SINGULAR, BYTES,    dev_cards,        30) \
+X(a, STATIC,   SINGULAR, BYTES,    knights_played,   31) \
+X(a, STATIC,   SINGULAR, UINT32,   largest_army_player,  32) \
+X(a, STATIC,   SINGULAR, UINT32,   longest_road_player,  33) \
+X(a, STATIC,   SINGULAR, UINT32,   longest_road_length,  34) \
+X(a, STATIC,   SINGULAR, UINT32,   dev_deck_remaining,  35) \
+X(a, STATIC,   SINGULAR, BOOL,     card_played_this_turn,  36) \
+X(a, STATIC,   SINGULAR, UINT32,   discard_required_mask,  37) \
+X(a, STATIC,   SINGULAR, BYTES,    discard_required_count,  38) \
+X(a, STATIC,   SINGULAR, UINT32,   steal_eligible_mask,  39) \
+X(a, STATIC,   SINGULAR, BYTES,    pending_road_buy,  40) \
+X(a, STATIC,   SINGULAR, BYTES,    pending_settlement_buy,  41) \
+X(a, STATIC,   SINGULAR, BYTES,    pending_city_buy,  42) \
+X(a, STATIC,   SINGULAR, BYTES,    free_roads_remaining,  43) \
+X(a, STATIC,   SINGULAR, UINT32,   trade_from_player,  50) \
+X(a, STATIC,   SINGULAR, UINT32,   trade_to_player,  51) \
+X(a, STATIC,   SINGULAR, BYTES,    trade_offer,      52) \
+X(a, STATIC,   SINGULAR, BYTES,    trade_want,       53) \
+X(a, STATIC,   SINGULAR, BYTES,    bank_supply,      60) \
+X(a, STATIC,   SINGULAR, BYTES,    last_distribution,  61) \
+X(a, STATIC,   OPTIONAL, UINT32,   difficulty,         62) \
+X(a, STATIC,   SINGULAR, BOOL,     has_saved_game,     63)
+#define catan_BoardState_CALLBACK NULL
+#define catan_BoardState_DEFAULT NULL
 
-#define catan_PlayerToBoard_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UENUM,    type,              1) \
-X(a, STATIC,   SINGULAR, UENUM,    button,            2)
-#define catan_PlayerToBoard_CALLBACK NULL
-#define catan_PlayerToBoard_DEFAULT NULL
+#define catan_PlayerInput_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   proto_version,     1) \
+X(a, STATIC,   SINGULAR, UINT32,   player_id,         2) \
+X(a, STATIC,   SINGULAR, UENUM,    action,            3) \
+X(a, STATIC,   SINGULAR, STRING,   client_id,         4) \
+X(a, STATIC,   SINGULAR, UINT32,   res_lumber,       11) \
+X(a, STATIC,   SINGULAR, UINT32,   res_wool,         12) \
+X(a, STATIC,   SINGULAR, UINT32,   res_grain,        13) \
+X(a, STATIC,   SINGULAR, UINT32,   res_brick,        14) \
+X(a, STATIC,   SINGULAR, UINT32,   res_ore,          15) \
+X(a, STATIC,   SINGULAR, UINT32,   want_lumber,      16) \
+X(a, STATIC,   SINGULAR, UINT32,   want_wool,        17) \
+X(a, STATIC,   SINGULAR, UINT32,   want_grain,       18) \
+X(a, STATIC,   SINGULAR, UINT32,   want_brick,       19) \
+X(a, STATIC,   SINGULAR, UINT32,   want_ore,         20) \
+X(a, STATIC,   SINGULAR, UINT32,   robber_tile,      21) \
+X(a, STATIC,   SINGULAR, UINT32,   target_player,    22) \
+X(a, STATIC,   SINGULAR, UINT32,   monopoly_res,     23) \
+X(a, STATIC,   SINGULAR, UINT32,   card_res_1,       24) \
+X(a, STATIC,   SINGULAR, UINT32,   card_res_2,       25)
+#define catan_PlayerInput_CALLBACK NULL
+#define catan_PlayerInput_DEFAULT NULL
 
-extern const pb_msgdesc_t catan_BoardToPlayer_msg;
-extern const pb_msgdesc_t catan_PlayerToBoard_msg;
+extern const pb_msgdesc_t catan_BoardState_msg;
+extern const pb_msgdesc_t catan_PlayerInput_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
-#define catan_BoardToPlayer_fields &catan_BoardToPlayer_msg
-#define catan_PlayerToBoard_fields &catan_PlayerToBoard_msg
+#define catan_BoardState_fields &catan_BoardState_msg
+#define catan_PlayerInput_fields &catan_PlayerInput_msg
 
 /* Maximum encoded size of messages (where known) */
-#define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardToPlayer_size
-#define catan_BoardToPlayer_size                 198
-#define catan_PlayerToBoard_size                 4
+#define CATAN_CATAN_PB_H_MAX_SIZE                catan_BoardState_size
+#define catan_BoardState_size                    520
+#define catan_PlayerInput_size                   155
 
 #ifdef __cplusplus
 } /* extern "C" */

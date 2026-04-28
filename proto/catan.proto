@@ -2,99 +2,261 @@ syntax = "proto3";
 
 package catan;
 
-/* ================================================================= */
-/* Central Board → Player Station                                     */
-/*                                                                    */
-/* Sent by the Arduino Mega (I2C master) to each ESP32 player         */
-/* station (I2C slave).  Contains everything the player display needs. */
-/* ================================================================= */
+// =============================================================================
+// Settlers of Catan — wire protocol (v8)
+//
+// Architecture (post-merge, single MCU):
+//
+//   [ESP32-C6 board controller]  <--BLE-->  [up to 4 mobiles]
+//
+// A single ESP32-C6 owns the entire game FSM, the Hall-effect sensor bus,
+// the WS2812 LEDs and the BLE peripheral. The mobile is a pure display +
+// input surface — it sends PlayerInput actions and renders BoardState.
+// There is no longer a separate hub MCU, no UART link, and no
+// PlayerPresence frame (BLE callbacks know slot occupancy directly).
+//
+// BLE wire format (per connection):
+//   mobile -> board:  bare nanopb PlayerInput bytes (no header — ATT carries length)
+//   board -> mobile:  bare nanopb BoardState bytes  (notify on state characteristic)
+//
+// Schema version: 8 — full automated game engine, single-MCU architecture.
+// =============================================================================
 
-message BoardToPlayer {
-  MsgType  type           = 1;
-  GamePhase phase         = 2;
-  uint32   current_player = 3;   // 0-based index of whose turn it is
-  uint32   num_players    = 4;
-  uint32   your_player_id = 5;   // 0-based index assigned to this station
-
-  // Dice
-  uint32   die1           = 6;
-  uint32   die2           = 7;
-  uint32   dice_total     = 8;
-
-  // Number-reveal phase
-  uint32   reveal_number  = 9;
-
-  // Display strings (rendered on the OLED)
-  string   line1          = 10;
-  string   line2          = 11;
-  string   btn_left       = 12;
-  string   btn_center     = 13;
-  string   btn_right      = 14;
-
-  // Victory points per player slot (index 0-3)
-  uint32   vp0            = 15;
-  uint32   vp1            = 16;
-  uint32   vp2            = 17;
-  uint32   vp3            = 18;
-
-  // Resources for the receiving player
-  uint32   res_lumber     = 19;
-  uint32   res_wool       = 20;
-  uint32   res_grain      = 21;
-  uint32   res_brick      = 22;
-  uint32   res_ore        = 23;
-
-  // End-of-game
-  uint32   winner_id      = 24;
-
-  // Setup round tracking
-  uint32   setup_round    = 25;  // 1 or 2 during initial placement
-  bool     has_rolled     = 26;  // true if current player already rolled
-}
-
-/* ================================================================= */
-/* Player Station → Central Board                                     */
-/*                                                                    */
-/* Sent by an ESP32 player station when the Arduino master requests   */
-/* data via I2C read.  Contains pending button input.                 */
-/* ================================================================= */
-
-message PlayerToBoard {
-  MsgType  type           = 1;
-  ButtonId button         = 2;
-}
-
-/* ================================================================= */
-/* Enums                                                              */
-/* ================================================================= */
-
-enum MsgType {
-  MSG_NONE          = 0;
-
-  // Central → Player
-  MSG_GAME_STATE    = 1;   // Full state sync (sent every cycle)
-  MSG_DICE_RESULT   = 2;   // Dice result notification
-  MSG_PROMPT        = 3;   // Display prompt with button labels
-
-  // Player → Central
-  MSG_BUTTON_EVENT  = 10;  // A button was pressed
-  MSG_PLAYER_READY  = 11;  // Station is alive (response to poll)
-}
+// ----- Enums ----------------------------------------------------------------
 
 enum GamePhase {
-  PHASE_WAITING_FOR_PLAYERS = 0;
-  PHASE_BOARD_SETUP         = 1;
-  PHASE_NUMBER_REVEAL       = 2;
-  PHASE_INITIAL_PLACEMENT   = 3;   // Setup rounds: place settlements + roads
-  PHASE_PLAYING             = 4;   // Main game loop
-  PHASE_ROBBER              = 5;   // Must move robber (rolled 7)
-  PHASE_TRADE               = 6;   // Port/bank trading
-  PHASE_GAME_OVER           = 7;
+  PHASE_LOBBY             = 0;
+  PHASE_BOARD_SETUP       = 1;
+  PHASE_NUMBER_REVEAL     = 2;
+  PHASE_INITIAL_PLACEMENT = 3;
+  PHASE_PLAYING           = 4;
+  PHASE_ROBBER            = 5;   // active player must move robber + (optionally) steal
+  PHASE_DISCARD           = 6;   // one or more players must discard down to 7 cards
+  PHASE_GAME_OVER         = 7;
 }
 
-enum ButtonId {
-  BTN_NONE   = 0;
-  BTN_LEFT   = 1;
-  BTN_CENTER = 2;
-  BTN_RIGHT  = 3;
+enum PlayerAction {
+  ACTION_NONE             = 0;
+  ACTION_READY            = 1;
+  ACTION_START_GAME       = 2;
+  ACTION_NEXT_NUMBER      = 3;
+  ACTION_PLACE_DONE       = 4;
+  ACTION_ROLL_DICE        = 5;
+  ACTION_END_TURN         = 6;
+  ACTION_SKIP_ROBBER      = 7;   // legacy: skip-steal after robber move when no targets
+
+  // ── Purchases ────────────────────────────────────────────────────────────
+  ACTION_BUY_ROAD            = 10;
+  ACTION_BUY_SETTLEMENT      = 11;
+  ACTION_BUY_CITY            = 12;
+  ACTION_BUY_DEV_CARD        = 13;
+
+  // ── Robber + Discard ─────────────────────────────────────────────────────
+  ACTION_PLACE_ROBBER        = 14;   // payload: robber_tile
+  ACTION_STEAL_FROM          = 15;   // payload: target_player
+  ACTION_DISCARD             = 16;   // payload: res_lumber..res_ore (counts)
+
+  // ── Trade ────────────────────────────────────────────────────────────────
+  ACTION_BANK_TRADE          = 17;   // payload: res_lumber..ore (give), want_lumber..ore (get)
+  ACTION_TRADE_OFFER         = 18;   // payload: target_player + offer/want
+  ACTION_TRADE_ACCEPT        = 19;
+  ACTION_TRADE_DECLINE       = 20;
+  ACTION_TRADE_CANCEL        = 21;   // current player retracts an open offer
+
+  // ── Development cards ────────────────────────────────────────────────────
+  ACTION_PLAY_KNIGHT         = 22;
+  ACTION_PLAY_ROAD_BUILDING  = 23;
+  ACTION_PLAY_YEAR_OF_PLENTY = 24;   // payload: card_res_1, card_res_2 (resource indices)
+  ACTION_PLAY_MONOPOLY       = 25;   // payload: monopoly_res
+
+  // Lobby-only: Player 0 selects board generation difficulty.
+  // payload: monopoly_res carries the Difficulty value (0=EASY, 1=NORMAL, 2=HARD, 3=EXPERT).
+  ACTION_SET_DIFFICULTY       = 26;
+
+  // Sent in response to the resume-game dialog (LOBBY phase only).
+  ACTION_RESUME_YES           = 27;  // restore the saved game
+  ACTION_RESUME_NO            = 28;  // discard the saved game, start fresh
+}
+
+// Resource type (also used as index into per-player count arrays):
+//   0 = LUMBER, 1 = WOOL, 2 = GRAIN, 3 = BRICK, 4 = ORE
+enum ResourceType {
+  RES_LUMBER = 0;
+  RES_WOOL   = 1;
+  RES_GRAIN  = 2;
+  RES_BRICK  = 3;
+  RES_ORE    = 4;
+}
+
+// Development card type (also used as index into dev_cards arrays):
+//   0 = KNIGHT, 1 = VP, 2 = ROAD_BUILDING, 3 = YEAR_OF_PLENTY, 4 = MONOPOLY
+enum DevCardType {
+  DEV_KNIGHT          = 0;
+  DEV_VP              = 1;
+  DEV_ROAD_BUILDING   = 2;
+  DEV_YEAR_OF_PLENTY  = 3;
+  DEV_MONOPOLY        = 4;
+}
+
+// Biome codes (packed into BoardState.tiles_packed high nibble of each byte).
+//   0 = DESERT, 1 = FOREST, 2 = PASTURE, 3 = FIELD, 4 = HILL, 5 = MOUNTAIN
+
+// ----- Messages -------------------------------------------------------------
+
+message BoardState {
+  uint32    proto_version  = 1;
+  GamePhase phase          = 2;
+  uint32    num_players    = 3;
+  uint32    current_player = 4;
+  uint32    setup_round    = 5;
+  bool      has_rolled     = 6;
+  uint32    die1           = 7;
+  uint32    die2           = 8;
+  uint32    reveal_number  = 9;
+  uint32    winner_id      = 10;   // 0xFF if no winner yet
+  uint32    robber_tile    = 11;   // 0xFF if unplaced
+  uint32    connected_mask = 12;   // bit i set => player i has a phone connected
+  bytes     tiles_packed   = 13;   // 19 bytes, one per tile (high nibble biome, low nibble number)
+  repeated uint32 vp       = 14;   // PUBLIC VP per player (settlements + cities + LR + LA),
+                                   // hidden VP dev cards excluded until game ends.
+  repeated uint32 ready    = 15;   // 0/1 ready flag per player slot, max 4
+
+  // Settlements / cities per vertex (54 vertices, packed as 27 bytes).
+  //   low nibble  = vertex 2*i     high nibble = vertex 2*i + 1
+  //   nibble value:
+  //     0x0..0x3 = settlement owned by player 0..3
+  //     0x4..0x7 = city       owned by player 0..3 (owner = nibble & 0x3)
+  //     0xF      = empty
+  // The final nibble (index 54) is unused and is always 0xF.
+  bytes vertex_owners = 16;
+
+  // Roads per edge (72 edges, packed as 36 bytes).
+  //   low nibble  = edge 2*i     high nibble = edge 2*i + 1
+  //   nibble value:
+  //     0x0..0x3 = road owned by player 0..3
+  //     0xF      = empty
+  bytes edge_owners = 17;
+
+  // Resource counts per player. Index = player id; length = 4.
+  repeated uint32 res_lumber = 20;
+  repeated uint32 res_wool   = 21;
+  repeated uint32 res_grain  = 22;
+  repeated uint32 res_brick  = 23;
+  repeated uint32 res_ore    = 24;
+
+  // Last placement / action rejection code for the current player.
+  // 0 = no rejection; set for exactly one broadcast cycle then cleared by
+  // the board. Mirrors firmware RejectReason — see catan.proto enum doc.
+  uint32 last_reject_reason = 25;
+
+  // ── Development cards (server-authoritative) ─────────────────────────────
+  // Per-player inventory packed as 5 bytes per player (one byte per type)
+  // in player-major order: [P0 K,VP,RB,YoP,Mono, P1 ..., P2 ..., P3 ...].
+  // Total 20 bytes.
+  bytes dev_cards = 30;
+  // Knights played per player (4 bytes).
+  bytes knights_played = 31;
+  // Player holding Largest Army (≥3 knights), or 0xFF if none.
+  uint32 largest_army_player = 32;
+  // Player holding Longest Road (≥5 connected roads), or 0xFF if none.
+  uint32 longest_road_player = 33;
+  // Length of the current Longest Road title-holding chain (0 if none).
+  uint32 longest_road_length = 34;
+  // Cards left in the dev card deck (0..25).
+  uint32 dev_deck_remaining = 35;
+  // True if the current player has already played a dev card this turn.
+  bool   card_played_this_turn = 36;
+
+  // ── Robber + Discard ─────────────────────────────────────────────────────
+  // Bitmask of players who must discard before the robber can be moved.
+  // Set when dice rolls 7 and any player has > 7 cards. A player exits
+  // the mask by sending ACTION_DISCARD with valid counts. When the mask
+  // hits 0 the FSM transitions to PHASE_ROBBER.
+  uint32 discard_required_mask = 37;
+  // Discard amount per player (the number of cards each must discard).
+  // 4 bytes; 0 for players not in `discard_required_mask`.
+  bytes  discard_required_count = 38;
+  // After PLACE_ROBBER, bitmask of players adjacent to the new robber tile
+  // who hold ≥1 resource — these are the candidates for ACTION_STEAL_FROM.
+  // 0 means no one is eligible; the FSM exits robber phase automatically.
+  uint32 steal_eligible_mask = 39;
+
+  // ── Pending purchases ────────────────────────────────────────────────────
+  // Pending purchase counters per player. Each 4-byte field stores a per
+  // player count — when > 0, the player has prepaid for that piece type
+  // and the next valid placement consumes one credit.
+  bytes pending_road_buy       = 40;   // 4 bytes
+  bytes pending_settlement_buy = 41;   // 4 bytes
+  bytes pending_city_buy       = 42;   // 4 bytes
+
+  // Free roads remaining from a Road Building card (per player, 4 bytes).
+  bytes free_roads_remaining = 43;
+
+  // ── Trade (one pending offer at a time) ──────────────────────────────────
+  uint32 trade_from_player = 50;   // 0xFF if no pending trade
+  uint32 trade_to_player   = 51;   // 0xFF = open offer to all opponents
+  bytes  trade_offer       = 52;   // 5 bytes — counts of L,W,G,B,O the offerer gives
+  bytes  trade_want        = 53;   // 5 bytes — counts of L,W,G,B,O the offerer wants
+
+  // Bank supply per resource (5 bytes: L,W,G,B,O).
+  bytes bank_supply = 60;
+
+  // Resources just distributed for the current dice roll. Set for one
+  // broadcast cycle after a non-7 roll completes distribution. 20 bytes
+  // in player-major order, one byte per (player, resource) — same layout
+  // as `dev_cards`. All zero outside the distribution broadcast.
+  bytes last_distribution = 61;
+
+  // Board generation difficulty selected by Player 0 in the lobby.
+  // 0 = EASY, 1 = NORMAL (default), 2 = HARD, 3 = EXPERT.
+  uint32 difficulty = 62;
+
+  // True when the board has a saved game from a previous session that the
+  // first connected player can choose to resume. Cleared once a choice is made.
+  bool has_saved_game = 63;
+}
+
+message PlayerInput {
+  uint32       proto_version = 1;
+  uint32       player_id     = 2;
+  PlayerAction action        = 3;
+
+  // Optional stable identifier of the originating mobile device. The board
+  // re-stamps every input with the authoritative player_id derived from
+  // the BLE connection slot, so client_id is informational only (used for
+  // diagnostics and seat persistence within a power session).
+  string client_id = 4;
+
+  // Generic resource payload — used by:
+  //   ACTION_DISCARD       — counts to discard
+  //   ACTION_BANK_TRADE    — counts to give
+  //   ACTION_TRADE_OFFER   — counts the offerer is giving
+  //   ACTION_PLAY_YEAR_OF_PLENTY (legacy alt: see card_res_*)
+  uint32 res_lumber = 11;
+  uint32 res_wool   = 12;
+  uint32 res_grain  = 13;
+  uint32 res_brick  = 14;
+  uint32 res_ore    = 15;
+
+  // "Wanted" resource payload — used by:
+  //   ACTION_BANK_TRADE    — counts to receive
+  //   ACTION_TRADE_OFFER   — counts the offerer wants
+  uint32 want_lumber = 16;
+  uint32 want_wool   = 17;
+  uint32 want_grain  = 18;
+  uint32 want_brick  = 19;
+  uint32 want_ore    = 20;
+
+  // ACTION_PLACE_ROBBER — destination tile (0..18).
+  uint32 robber_tile = 21;
+
+  // ACTION_STEAL_FROM, ACTION_TRADE_OFFER — target player (0..3, 0xFF for open offer).
+  uint32 target_player = 22;
+
+  // ACTION_PLAY_MONOPOLY — resource index to monopolize (0..4).
+  uint32 monopoly_res = 23;
+
+  // ACTION_PLAY_YEAR_OF_PLENTY — two chosen resource indices (0..4).
+  uint32 card_res_1 = 24;
+  uint32 card_res_2 = 25;
 }
