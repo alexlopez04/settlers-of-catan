@@ -1472,8 +1472,16 @@ export function Scoreboard({ state, myId, theme }: CommonProps) {
                 {isWinner ? '🏆 ' : ''}{isMe ? 'You' : `P${i + 1}`}
               </Text>
               <View style={s.scoreBadges}>
-                {isLA && <Text style={[s.miniBadge, { color: theme.primary }]}>⚔ LA</Text>}
-                {isLR && <Text style={[s.miniBadge, { color: theme.primary }]}>🛤 LR</Text>}
+                {isLA && (
+                  <View style={[s.specialBadge, s.laBadge]}>
+                    <Text style={s.specialBadgeText}>⚔ LA</Text>
+                  </View>
+                )}
+                {isLR && (
+                  <View style={[s.specialBadge, s.lrBadge]}>
+                    <Text style={s.specialBadgeText}>🛤 {state.longestRoadLength}</Text>
+                  </View>
+                )}
                 <Text style={[s.miniBadge, { color: theme.textSecondary }]}>
                   {playerTotalCards(state, i)} cards
                 </Text>
@@ -1694,9 +1702,16 @@ const s = StyleSheet.create({
     paddingHorizontal: Spacing.two, paddingVertical: Spacing.two, borderRadius: 10,
   },
   scoreName:   { fontSize: 14, fontWeight: '700', minWidth: 60 },
-  scoreBadges: { flexDirection: 'row', gap: Spacing.two, flex: 1, justifyContent: 'flex-end' },
+  scoreBadges: { flexDirection: 'row', gap: Spacing.two, flex: 1, justifyContent: 'flex-end', alignItems: 'center' },
   miniBadge:   { fontSize: 11, fontWeight: '700' },
   scoreVp:     { fontSize: 20, fontWeight: '900', marginLeft: Spacing.two, minWidth: 28, textAlign: 'right' },
+  // Special card badges (LA / LR)
+  specialBadge: {
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
+  },
+  laBadge: { backgroundColor: '#e74c3c' },
+  lrBadge: { backgroundColor: '#e67e22' },
+  specialBadgeText: { fontSize: 11, fontWeight: '800', color: '#fff' },
 
   // Dice roll popup
   diceModalBg: {
