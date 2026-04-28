@@ -1,100 +1,59 @@
 # Wiring
 
-Hardware topology for the new single-hub architecture.
+Hardware topology for the single-MCU architecture.
 
 ```
-                       ┌────────────────┐
-                       │  Phone (×1..4) │
-                       └───────┬────────┘
-                               │   BLE GATT (NimBLE)
-                               │   Service CA7A0001
-                               ▼
-                    ┌──────────────────────┐
-                    │  ESP32-C6-WROOM-1    │
-                    │  "Catan-Board" hub   │
-                    │  (one device, up to  │
-                    │   4 BLE centrals)    │
-                    └────────┬─────────────┘
-                             │ UART (3.3V)
-                             │ 115200 8N1
-                             │ + level shifter
-                             ▼
-                    ┌──────────────────────┐
-                    │  Arduino Mega 2560   │
-                    │  Game FSM + LEDs     │
-                    │  + I²C sensor master │
-                    └────────┬─────────────┘
-                             │ I²C @100 kHz (5 V)
-                             ▼
-              ┌──────────────────────────────┐
-              │  PCF8574(A) input expanders  │
-              │  0x20 .. 0x27 (presence)     │
-              └──────────────────────────────┘
+Phone (x1-4)
+     |
+     | BLE GATT (NimBLE, up to 4 connections)
+     |
+     v
+ESP32-C6-WROOM-1  ("Catan-Board")
+     |          |
+     | I2C      | GPIO10
+     | 400 kHz  | WS2812B LED strip
+     |
+     v
+PCF8575 sensor expanders (0x20-0x27)
 ```
 
-There is **only one ESP32**. All player phones connect to the same hub over
-Bluetooth; the hub multiplexes everything onto a single UART link to the Mega.
+One ESP32-C6 owns everything: game FSM, sensors, LEDs, and BLE.
+There is no separate hub or game controller MCU.
 
 ---
 
-## ESP32-C6 ↔ Arduino Mega (UART)
+## ESP32-C6 pinout
 
-| Signal | ESP32-C6 (GPIO) | Mega (Serial1) | Notes                            |
-|--------|-----------------|----------------|----------------------------------|
-| TX1    | **GPIO4**       | RX1 (pin 19)   | hub → Mega; level shift required |
-| RX1    | **GPIO5**       | TX1 (pin 18)   | Mega → hub; level shift required |
-| GND    | GND             | GND            | common ground                    |
+| GPIO | Function      | Notes                                   |
+|------|---------------|-----------------------------------------|
+| 6    | I2C SDA       | 4.7 kOhm pull-up to 3.3 V              |
+| 7    | I2C SCL       | 4.7 kOhm pull-up to 3.3 V              |
+| 10   | LED data      | WS2812B strip (RMT). May need level shift for 5 V strips |
 
-> **Why not GPIO16/17?** On the ESP32-C6 those are UART0 pins, wired to the
-> USB-to-serial bridge used for logging. Assigning `Serial1` to them would
-> mix binary link frames into the USB console output.
+Avoid strapping pins GPIO 8, 9, and 15.
 
-* Baud: **115200 8N1**
-* The Mega runs at **5 V** and the ESP32-C6 at **3.3 V** — use a bidirectional
-  level shifter (e.g. TXS0108E or two MOSFET stages) on both lines. Driving
-  the C6 RX directly from a 5 V Mega TX will damage the C6.
-* Wire format: `[0xCA magic][type:u8][len:u8][payload..len][crc8]`
-  (CRC-8 polynomial 0x07, init 0x00, covers `type ∥ len ∥ payload`).
-* Three message types are exchanged on this link:
-  - `0x01 BoardState`     — Mega → hub, every 200 ms (full game snapshot)
-  - `0x02 PlayerInput`    — hub → Mega, on every player BLE write
-  - `0x03 PlayerPresence` — hub → Mega, every BLE connect/disconnect + 1 Hz keep-alive
+## I2C sensor bus
 
-## ESP32-C6 power & boot
+PCF8575 16-bit input expanders at addresses 0x20-0x27 (8 boards = 128 inputs).
 
-* 5 V or USB power into the dev board's regulator (≥ 500 mA budget).
-* Decoupling: 100 nF + 10 µF as close to 3V3 as feasible.
-* No additional GPIO is required from the C6 — it has no LEDs or sensors of
-  its own; it only does BLE and UART.
+Pull-ups: 4.7 kOhm each on SDA/SCL to 3.3 V. Bus speed: 400 kHz.
 
-## Mega ↔ sensor expanders (I²C)
-
-The I²C bus on the Mega is **dedicated to sensor input** now (the player
-slaves are gone). Pull-ups: 4.7 kΩ each on SDA/SCL to 5 V.
-
-| Mega pin | Function | Goes to                |
-|----------|----------|------------------------|
-| 20 (SDA) | I²C SDA  | PCF8574 SDA, all units |
-| 21 (SCL) | I²C SCL  | PCF8574 SCL, all units |
-| 5 V      | VCC      | PCF8574 VCC            |
-| GND      | GND      | PCF8574 GND            |
-
-Expander addresses (8 boards = 64 inputs total) and their assignment to
-vertices / edges / tiles are defined in
-[`firmware/board/src/pin_map.cpp`](../firmware/board/src/pin_map.cpp).
+Expander addresses and their assignment to vertices, edges, and tiles are
+defined in [firmware/src/pin_map.cpp](../firmware/src/pin_map.cpp).
 
 ## LEDs
 
-WS2812 strips are driven from a Mega GPIO via a level shifter (74AHCT125 or
-similar). See [`firmware/board/src/led_map.cpp`](../firmware/board/src/led_map.cpp)
-for the LED-index → tile/port mapping.
+WS2812B strip driven from GPIO10 via FastLED (RMT peripheral). The LED-index
+to tile/port mapping is in [firmware/src/led_map.cpp](../firmware/src/led_map.cpp).
+
+If the strip operates at 5 V, use a level shifter (e.g. 74HCT1G125) or
+switch to 3.3 V-tolerant SK6812 LEDs.
 
 ---
 
 ## Quick checklist
 
-1. Common ground between Mega, ESP32-C6, level shifter, and LED PSU.
-2. Level-shift both UART directions; **never** tie 5 V Mega TX directly to the C6.
-3. I²C pull-ups present on the sensor bus (and only there).
-4. One — and only one — ESP32-C6 powered up on the bench. Multiple boards
-   advertising as `Catan-Board` will confuse phones.
+1. Common ground between the ESP32-C6, PCF8575 boards, and LED PSU.
+2. I2C pull-ups present (4.7 kOhm to 3.3 V).
+3. Only one ESP32-C6 powered and advertising as `Catan-Board` at a time.
+

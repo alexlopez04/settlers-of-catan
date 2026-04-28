@@ -1,41 +1,31 @@
 # Settlers of Catan
 
-Firmware, protocol, and mobile app for the Settlers of Catan senior design
-project.
+Firmware, protocol, and mobile app for an electronic Settlers of Catan board.
 
 ## Architecture
 
-```
-phone(s)  ──BLE──▶  ESP32-C6 hub  ──UART──▶  Arduino Mega  ──I²C──▶  PCF8574 sensors
-                   ("Catan-Board")            (game FSM, LEDs)
-```
+A single ESP32-C6 owns the entire game: FSM, Hall-effect sensor bus
+(PCF8575 expanders over I2C), WS2812B LED strip (RMT via FastLED), and
+BLE peripheral (NimBLE, up to 4 simultaneous connections). Phone connect
+via the mobile app and interact with the board over a Bluetooth API.
 
-* The Mega owns the game finite-state machine, the LED strip, and the I²C
-  sensor bus.
-* A single ESP32-C6 acts as the BLE hub. It accepts up to 4 simultaneous
-  phone connections, hands each a stable player slot (0..3) backed by NVS,
-  and bridges everything to/from the Mega over a framed UART link.
-* Phones speak only BLE — they never talk I²C and never see the UART frame
-  envelope.
-
-See [docs/wiring.md](docs/wiring.md) for the pinout and
-[docs/bluetooth_api.md](docs/bluetooth_api.md) for the GATT contract.
+See [docs/bluetooth_api.md](docs/bluetooth_api.md) for the GATT contract
+and [docs/board_layout.md](docs/board_layout.md) for the coordinate system.
 
 ## Project structure
 
-| Path           | Description                                           |
-|----------------|-------------------------------------------------------|
-| `proto/`       | nanopb schema, generation script, options             |
-| `firmware/board/` | Arduino Mega 2560 firmware (game FSM, LEDs, sensors) |
-| `firmware/hub/`   | ESP32-C6 BLE hub firmware (NimBLE multi-conn)        |
-| `app/`         | Expo / React Native mobile app                        |
-| `docs/`        | Wiring + Bluetooth API documentation                  |
+| Path         | Description                                          |
+|--------------|------------------------------------------------------|
+| `proto/`     | nanopb schema, generation script, options            |
+| `firmware/`  | ESP32-C6 firmware (game FSM, LEDs, sensors, BLE)     |
+| `app/`       | Expo / React Native mobile app                       |
+| `docs/`      | API and board layout reference                       |
 
 ## Getting started
 
 ### Toolchain
 
-* [PlatformIO](https://platformio.org/) for both firmware targets
+* [PlatformIO](https://platformio.org/) for firmware
 * [nanopb](https://jpa.kapsi.fi/nanopb/) + [protoc](https://protobuf.dev/)
   to regenerate `*.pb.{c,h}` files
 * [pnpm](https://pnpm.io/) for the mobile app
@@ -48,23 +38,23 @@ brew install platformio nanopb protobuf pnpm
 
 ```sh
 cd proto
-./generate.sh           # writes into firmware/board/src/proto and firmware/hub/src/proto
+./generate.sh   # writes catan.pb.{c,h} into firmware/src/proto/
 ```
 
 ### Build firmware
 
 ```sh
-# Mega game controller
-cd firmware/board
-pio run -e megaatmega2560
+cd firmware
 
-# ESP32-C6 BLE hub
-cd firmware/hub
-pio run -e hub
+# Production build for the ESP32-C6
+pio run -e board
 
-# Native simulation of the game FSM (no hardware required)
-cd firmware/board
-pio run -e native -t exec
+# Host-side simulation of the game FSM (no hardware required)
+pio run -e native
+./.pio/build/native/program
+
+# I2C expander monitor (useful for sensor mapping)
+pio run -e debug_i2c
 ```
 
 ### Mobile app
@@ -72,10 +62,6 @@ pio run -e native -t exec
 ```sh
 cd app
 pnpm install
-pnpm start              # Expo dev server
+pnpm start      # Expo dev server
 # pnpm ios / pnpm android once a development build is installed
 ```
-
-The first time the app launches it generates a UUIDv4 client identifier and
-stores it via AsyncStorage. That identifier is what the hub uses to keep your
-slot consistent across reconnects.

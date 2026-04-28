@@ -1,6 +1,6 @@
 # Board Layout Reference
 
-This document describes the tile coordinate system, port numbering, and graph element IDs used by the firmware. All data lives in `firmware/board/src/board_topology.cpp` and `firmware/board/src/led_map.cpp`.
+This document describes the tile coordinate system, port numbering, and graph element IDs used by the firmware. All data lives in `firmware/src/board_topology.cpp` and `firmware/src/led_map.cpp`.
 
 ---
 
@@ -23,20 +23,7 @@ The board uses **pointy-top axial hex coordinates** `(q, r)`.
 - **r** increases down-right (so each row shifts half a hex to the right as r increases by 1).
 - The center tile is `T00 (q=0, r=0)`.
 
-Within each hex, vertices and edges are numbered **clockwise from North**:
-
-```
-  Vertices:         Edges:
-
-       0 (N)             0 (NE)
-      / \              /     \
-  5 /   \ 1       5 /         \ 1 (E)
-(NW)     (NE)   (NW)           
-    |   |              |       |
-  4 \   / 2       4 \         / 2 (SE)
-  (SW) (SE)       (W)   3   (SE)
-       3 (S)             (SW)
-```
+Within each hex, vertices and edges are numbered **clockwise from North**.
 
 ---
 
@@ -80,18 +67,7 @@ Full table:
 
 ## Port Map
 
-9 ports, IDs P0–P8. Each port sits on a gap between two coastal tiles and occupies two adjacent coastal vertices. Going **clockwise from the east side**:
-
-```
-                 P3 (Wool 2:1)
-         P4(3:1)     N      P2(3:1)
-        /      \           /      \
-   P5(Grain)   NW        NE   P1(Lumber)
-      |                           |
-   P6(Brick)   SW        SE   P0 (3:1)
-        \      /           \      /
-         P7(3:1)     S      P8(Ore 2:1)
-```
+9 ports, IDs P0–P8. Each port sits on a gap between two coastal tiles and occupies two adjacent coastal vertices. Going **clockwise from the east side**.
 
 Full table (vertices are the two intersection points the port touches):
 
@@ -131,7 +107,5 @@ The single WS2812B strip is addressed sequentially. The default assignment:
 
 - **Tiles** (2 LEDs each): strip indices 1–47, with a few gaps (index 0 unused; index 5 unused; indices 8, 17 unused between some tiles — see `TILE_LED_MAP` for exact assignments).
 - **Ports** (1 LED each): strip indices 38–46.
-
-> ⚠️ Note: The tile and port LED ranges overlap in the current `led_map.cpp` — port LEDs start at index 38, which collides with tile T09's LEDs (46, 47). This is a known issue; the strip index assignments need to be reconciled if both tile and port LEDs are driven simultaneously.
 
 To relocate LEDs, edit the index arrays in `TILE_LED_MAP` and `PORT_LED_MAP` inside `led_map.cpp`. Increase `MAX_LEDS_PER_TILE` / `MAX_LEDS_PER_PORT` in `config.h` before adding more LEDs per element.

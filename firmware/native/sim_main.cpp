@@ -1,7 +1,7 @@
 // =============================================================================
 // native/sim_main.cpp — Host-side simulation harness for the board FSM.
 //
-// Compiled by `pio run -e native -t exec` (see firmware/board/platformio.ini).
+// Compiled by `pio run -e native -t exec` (see firmware/platformio.ini).
 // The harness constructs a `core::StateMachine`, plays scripted scenarios,
 // and checks observable state. It exits 0 if every assertion held.
 //

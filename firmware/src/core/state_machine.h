@@ -7,7 +7,7 @@
 // resource distributions, dev-card events, trades, winner). Mutates game
 // state through `game::`; calls `core::rules` for validation.
 //
-// Host-compilable for the native simulation (firmware/board/native/sim_main.cpp).
+// Host-compilable for the native simulation (firmware/native/sim_main.cpp).
 // =============================================================================
 
 #include <stdint.h>
