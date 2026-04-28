@@ -70,8 +70,8 @@ const ORIENTATION_COLOR: Record<number, string> = Object.fromEntries(
   ORIENTATION_POINTS.map(p => [p.tile, p.color]),
 );
 
-export const PLAYER_FILL = ['#e63946', '#4361ee', '#f4a261', '#f0f0f0'];
-const PLAYER_STROKE = ['#a01020', '#2040b0', '#c06820', '#909090'];
+export const PLAYER_FILL = ['#e63946', '#4361ee', '#f4a261', '#9b59b6'];
+const PLAYER_STROKE = ['#a01020', '#2040b0', '#c06820', '#6c2e8a'];
 
 const PORT_FILL: Record<PortType, string> = {
   [PortType.GENERIC_3_1]: '#aaaaaa',

@@ -48,7 +48,7 @@ static uint32_t loop_count        = 0;
 
 // ── Player colours ──────────────────────────────────────────────────────────
 static const CRGB kPlayerColors[MAX_PLAYERS] = {
-    CRGB::Red, CRGB::Blue, CRGB::Orange, CRGB::White
+    CRGB::Red, CRGB::Blue, CRGB::Orange, CRGB::Purple
 };
 
 // ── Lobby orientation-pattern constants ─────────────────────────────────────
