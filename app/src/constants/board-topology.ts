@@ -1,7 +1,7 @@
 // =============================================================================
 // board-topology.ts — Static Catan board graph data + geometry helpers.
 //
-// Mirrors firmware/board/src/board_topology.cpp (tile / vertex / edge / port
+// Mirrors firmware/src/board_topology.cpp (tile / vertex / edge / port
 // topology) and the hex layout in docs/board_layout.md. Keep this file in
 // sync with the firmware tables — positions are derived from them.
 //

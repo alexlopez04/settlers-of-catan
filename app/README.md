@@ -1,56 +1,50 @@
-# Welcome to your Expo app 👋
+# Catan App
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo / React Native mobile app for the Catan electronic board.
 
-## Get started
+Players connect via BLE to the board controller and use this app as their
+game display and input surface. The board handles all game logic; the app
+renders state and sends player actions.
 
-1. Install dependencies
+## Setup
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```sh
+pnpm install
+pnpm start      # Expo dev server
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+For a device build (required for BLE):
 
-### Other setup steps
+```sh
+pnpm ios        # requires Xcode + connected device or simulator
+pnpm android
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+After adding or removing native dependencies, rebuild the native project:
 
-## Learn more
+```sh
+pnpm expo prebuild --clean
+cd ios && pod install
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## Structure
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+| Path                        | Description                              |
+|-----------------------------|------------------------------------------|
+| `src/app/`                  | Expo Router screens                      |
+| `src/components/game/`      | Game phase UI components                 |
+| `src/components/ui/`        | Shared UI (board map, overlays)          |
+| `src/context/`              | BLE, settings, and tutorial contexts     |
+| `src/constants/`            | Board topology, theme, BLE UUIDs         |
+| `src/services/proto.ts`     | Hand-rolled protobuf encode/decode       |
+| `src/utils/board-rotation.ts` | Board orientation helpers              |
 
-## Join the community
+## BLE connection
 
-Join our community of developers creating universal apps.
+The app scans for a device named `Catan-Board` and connects to the GATT
+service at `CA7A0001-...`. See [../docs/bluetooth_api.md](../docs/bluetooth_api.md)
+for the full API.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Player slot is derived from the BLE device name `Catan-P1`..`Catan-P4`
+(0-indexed internally as 0..3).
+

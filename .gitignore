@@ -1,7 +1,12 @@
 # PlatformIO
 .pio/
 
-# Generated files and build artifacts
+# Generated protobuf sources
+firmware/src/proto/catan.pb.c
+firmware/src/proto/catan.pb.h
+firmware/src/proto/catan.options
+
+# Build artifacts
 *_gen/
 build/
 *.o
@@ -11,24 +16,26 @@ build/
 *.hex
 *.log
 
-# MacOS metadata files
+# macOS
 .DS_Store
+*.pem
 
 # Windows
 Thumbs.db
 
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# Python
+.pytest_cache/
+__pycache__/
+*.pyc
 
-# dependencies
+# Node / Expo
 node_modules/
-
-# Expo
 .expo/
 dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# Native mobile
 .kotlin/
 *.orig.*
 *.jks
@@ -40,14 +47,21 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
-# debug
+# Debug logs
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
-.DS_Store
-*.pem
+# iOS build outputs (keep ios/ source, ignore generated build dir)
+app/ios/build/
+app/ios/Pods/
+app/ios/*.xcworkspace/xcuserdata/
+
+# Android build outputs
+app/android/.gradle/
+app/android/build/
+app/android/app/build/
+
 
 # local env files
 .env*.local
