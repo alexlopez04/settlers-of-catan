@@ -572,11 +572,13 @@ uint8_t longestPathFromEdge(uint8_t player, uint8_t start_edge,
                             uint8_t start_vertex,
                             uint8_t edges_visited[(EDGE_COUNT + 7) / 8]) {
     // DFS from the (vertex_into) end of `start_edge` outward.
-    uint8_t best = 1;
+    // Returns the number of ADDITIONAL edges reachable from start_vertex
+    // (not counting start_edge, which is already tallied by the caller).
+    uint8_t best = 0;
     const VertexDef& vd = VERTEX_TOPO[start_vertex];
-    // If an opponent occupies start_vertex, we can't continue through it.
+    // If an opponent occupies start_vertex, the path cannot continue here.
     uint8_t v_owner = vertices[start_vertex].owner;
-    if (v_owner != NO_PLAYER && v_owner != player) return 1;
+    if (v_owner != NO_PLAYER && v_owner != player) return 0;
     for (uint8_t i = 0; i < 3; ++i) {
         uint8_t e = vd.edges[i];
         if (e >= EDGE_COUNT) continue;
@@ -621,31 +623,48 @@ uint8_t longestRoadFor(uint8_t player) {
 }  // anonymous
 
 void recomputeLongestRoad() {
-    uint8_t best_player = longest_road_player_;
-    uint8_t best_len    = longest_road_length_;
-    uint8_t holder_len  = (longest_road_player_ != NO_PLAYER)
-                              ? longestRoadFor(longest_road_player_) : 0;
-
-    if (holder_len < LONGEST_ROAD_MIN) {
-        // Holder lost their qualifying chain.
-        best_player = NO_PLAYER;
-        best_len    = 0;
-    } else {
-        best_len = holder_len;
+    // Cache each player's current road length.
+    uint8_t lengths[MAX_PLAYERS] = {};
+    uint8_t max_len = 0;
+    for (uint8_t p = 0; p < num_players; ++p) {
+        lengths[p] = longestRoadFor(p);
+        if (lengths[p] > max_len) max_len = lengths[p];
     }
 
+    if (max_len < LONGEST_ROAD_MIN) {
+        longest_road_player_ = NO_PLAYER;
+        longest_road_length_ = 0;
+        return;
+    }
+
+    // If the current holder still shares the maximum, they keep the card
+    // (Catan tie rule: holder is never displaced by a tie).
+    if (longest_road_player_ != NO_PLAYER &&
+        lengths[longest_road_player_] == max_len) {
+        longest_road_length_ = max_len;
+        return;
+    }
+
+    // Holder does not have max_len — count who does.
+    uint8_t count = 0;
+    uint8_t new_holder = NO_PLAYER;
     for (uint8_t p = 0; p < num_players; ++p) {
-        if (p == best_player) continue;
-        uint8_t len = longestRoadFor(p);
-        if (len < LONGEST_ROAD_MIN) continue;
-        // Strictly exceed the current holder to take title (Catan tie rule).
-        if (len > best_len) {
-            best_player = p;
-            best_len    = len;
+        if (lengths[p] == max_len) {
+            ++count;
+            new_holder = p;
         }
     }
-    longest_road_player_ = best_player;
-    longest_road_length_ = (best_player == NO_PLAYER) ? 0 : best_len;
+
+    if (count == 1) {
+        // Unique new leader takes the card.
+        longest_road_player_ = new_holder;
+        longest_road_length_ = max_len;
+    } else {
+        // Multiple players tied and holder is not among them:
+        // nobody holds the card until one player pulls ahead.
+        longest_road_player_ = NO_PLAYER;
+        longest_road_length_ = 0;
+    }
 }
 
 // ── VP ──────────────────────────────────────────────────────────────────────

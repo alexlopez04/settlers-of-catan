@@ -803,17 +803,15 @@ static void test_initial_placement_one_road_per_turn() {
     CHECK_EQ((int)game::roadCount(cp), 1);
 }
 
-static void test_longest_road() {
-    g_current_test = "longest_road";
-    game::init();
-    game::setNumPlayers(2);
-
-    // Build a chain of 5 connected roads for P0.
-    // We pick edges sharing endpoints by walking VERTEX_TOPO.
-    // Start from vertex 0; pick one of its edges, then walk.
-    uint8_t cur_v = 0;
+// Walk n connected edges from start_v along unoccupied edges for `player`.
+// Fills visited_verts[] with each vertex arrived at (up to n entries).
+// Returns the number of edges actually placed.
+static uint8_t walkAndPlaceRoads(uint8_t start_v, uint8_t n, uint8_t player,
+                                  uint8_t visited_verts[] /* capacity n */) {
+    uint8_t cur_v = start_v;
     uint8_t prev_e = 0xFF;
-    for (uint8_t step = 0; step < 5; ++step) {
+    uint8_t placed = 0;
+    for (uint8_t step = 0; step < n; ++step) {
         const VertexDef& vd = VERTEX_TOPO[cur_v];
         uint8_t e = 0xFF;
         for (uint8_t i = 0; i < 3; ++i) {
@@ -824,16 +822,158 @@ static void test_longest_road() {
             e = cand; break;
         }
         if (e == 0xFF) break;
-        game::placeRoad(e, 0);
+        game::placeRoad(e, player);
         const EdgeDef& ed = EDGE_TOPO[e];
         uint8_t other = (ed.vertices[0] == cur_v) ? ed.vertices[1] : ed.vertices[0];
         cur_v = other;
         prev_e = e;
+        visited_verts[placed] = cur_v;
+        ++placed;
     }
-    CHECK_EQ((int)game::roadCount(0), 5);
-    game::recomputeLongestRoad();
-    CHECK_EQ((int)game::longestRoadPlayer(), 0);
-    CHECK(game::longestRoadLength() >= 5);
+    return placed;
+}
+
+static void test_longest_road() {
+    g_current_test = "longest_road";
+
+    // ── Sub-test 1: simple chain of 5 roads scores exactly 5 ──────────────
+    {
+        game::init();
+        game::setNumPlayers(2);
+
+        uint8_t verts[5];
+        uint8_t placed = walkAndPlaceRoads(0, 5, 0, verts);
+        CHECK_EQ((int)placed, 5);
+        CHECK_EQ((int)game::roadCount(0), 5);
+        game::recomputeLongestRoad();
+        CHECK_EQ((int)game::longestRoadPlayer(), 0);
+        CHECK_EQ((int)game::longestRoadLength(), 5);
+    }
+
+    // ── Sub-test 2: chain of 4 roads does NOT qualify (< 5) ───────────────
+    {
+        game::init();
+        game::setNumPlayers(2);
+
+        uint8_t verts[4];
+        uint8_t placed = walkAndPlaceRoads(0, 4, 0, verts);
+        CHECK_EQ((int)placed, 4);
+        game::recomputeLongestRoad();
+        CHECK_EQ((int)game::longestRoadPlayer(), (int)NO_PLAYER);
+        CHECK_EQ((int)game::longestRoadLength(), 0);
+    }
+
+    // ── Sub-test 3: opponent settlement mid-chain breaks the road ──────────
+    // Build 5 roads for P0 (v0→v1→v2→v3→v4→v5).
+    // Place P1 settlement at the 3rd vertex (v3, i.e. after 3 steps).
+    // P0's chain is now split: max segment = 2 (either side of the break).
+    {
+        game::init();
+        game::setNumPlayers(2);
+
+        uint8_t verts[5];
+        uint8_t placed = walkAndPlaceRoads(0, 5, 0, verts);
+        CHECK_EQ((int)placed, 5);
+
+        // verts[2] is the vertex arrived at after 3 edges (the mid-point).
+        uint8_t mid_v = verts[2];
+        game::placeSettlement(mid_v, 1);   // P1 blocks mid-point
+
+        game::recomputeLongestRoad();
+        // Longest segment on either side is 2 edges — below the 5-road threshold.
+        CHECK_EQ((int)game::longestRoadPlayer(), (int)NO_PLAYER);
+        CHECK_EQ((int)game::longestRoadLength(), 0);
+    }
+
+    // ── Sub-test 4: P0 holds card; P1 ties — holder keeps card ────────────
+    {
+        game::init();
+        game::setNumPlayers(2);
+
+        // Give P0 the card with 5 roads.
+        uint8_t v0[5];
+        walkAndPlaceRoads(0, 5, 0, v0);
+        game::recomputeLongestRoad();
+        CHECK_EQ((int)game::longestRoadPlayer(), 0);
+
+        // P1 builds exactly 5 roads from a different start vertex.
+        // Find a vertex not yet used.
+        uint8_t start1 = 0xFF;
+        for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+            bool used = false;
+            for (uint8_t k = 0; k < 5; ++k) if (v0[k] == v) { used = true; break; }
+            if (!used) { start1 = v; break; }
+        }
+        if (start1 != 0xFF) {
+            uint8_t v1[5];
+            uint8_t p1placed = walkAndPlaceRoads(start1, 5, 1, v1);
+            if (p1placed == 5) {
+                game::recomputeLongestRoad();
+                // Tie: P0 (holder) keeps the card.
+                CHECK_EQ((int)game::longestRoadPlayer(), 0);
+            }
+        }
+    }
+
+    // ── Sub-test 5: no holder, two players both reach 5 — nobody gets it ──
+    {
+        game::init();
+        game::setNumPlayers(2);
+
+        // P0: 5 roads.
+        uint8_t v0[5];
+        walkAndPlaceRoads(0, 5, 0, v0);
+
+        // P1: 5 roads from a separate start.
+        uint8_t start1 = 0xFF;
+        for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+            bool used = false;
+            for (uint8_t k = 0; k < 5; ++k) if (v0[k] == v) { used = true; break; }
+            if (!used) { start1 = v; break; }
+        }
+        if (start1 != 0xFF) {
+            uint8_t v1[5];
+            uint8_t p1placed = walkAndPlaceRoads(start1, 5, 1, v1);
+            if (p1placed == 5) {
+                // Recalculate from a clean holder state (no one holds yet).
+                game::recomputeLongestRoad();
+                // Two players tied at 5 with no prior holder → nobody gets it.
+                CHECK_EQ((int)game::longestRoadPlayer(), (int)NO_PLAYER);
+                CHECK_EQ((int)game::longestRoadLength(), 0);
+            }
+        }
+    }
+
+    // ── Sub-test 6: P0 extends to 6, takes card from P1 who has 5 ─────────
+    {
+        game::init();
+        game::setNumPlayers(2);
+
+        // P1 gets the card first with 5 roads.
+        uint8_t v1[5];
+        uint8_t p1placed = walkAndPlaceRoads(0, 5, 1, v1);
+        if (p1placed == 5) {
+            game::recomputeLongestRoad();
+            CHECK_EQ((int)game::longestRoadPlayer(), 1);
+
+            // P0 builds 6 roads from a fresh start.
+            uint8_t start0 = 0xFF;
+            for (uint8_t v = 0; v < VERTEX_COUNT; ++v) {
+                bool used = false;
+                for (uint8_t k = 0; k < 5; ++k) if (v1[k] == v) { used = true; break; }
+                if (!used) { start0 = v; break; }
+            }
+            if (start0 != 0xFF) {
+                uint8_t v0[6];
+                uint8_t p0placed = walkAndPlaceRoads(start0, 6, 0, v0);
+                if (p0placed == 6) {
+                    game::recomputeLongestRoad();
+                    CHECK_EQ((int)game::longestRoadPlayer(), 0);
+                    CHECK_EQ((int)game::longestRoadLength(), 6);
+                }
+            }
+        }
+    }
 }
 
 // Verify that PLACE_DONE during INITIAL_PLACEMENT is rejected if the player
