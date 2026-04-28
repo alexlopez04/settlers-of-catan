@@ -46,16 +46,31 @@ uint8_t lookupSlotLocked(const char* client_id) {
     return NO_SLOT;
 }
 
-uint8_t claimSlot(const char* client_id, uint16_t conn) {
+// preferred = NO_SLOT means «assign me the next free slot».
+// preferred = 0..3 means «I want that specific slot if it is not currently occupied».
+uint8_t claimSlot(const char* client_id, uint16_t conn, uint8_t preferred = NO_SLOT) {
     if (!client_id || !client_id[0]) return NO_SLOT;
     uint8_t slot = NO_SLOT;
     portENTER_CRITICAL(&g_slot_mux);
-    slot = lookupSlotLocked(client_id);
+
+    // If a preferred slot was requested and it is not actively occupied by
+    // a *different* live connection, honour the preference.
+    if (preferred < MAX_PLAYERS && !g_slots[preferred].occupied) {
+        // Clear any stale client_id that was stored in that slot so the new
+        // owner fully takes it over.
+        g_slots[preferred].client_id[0] = '\0';
+        slot = preferred;
+    }
+
+    // Fall back to normal assignment: same client_id → same slot.
+    if (slot == NO_SLOT) slot = lookupSlotLocked(client_id);
+    // Then first slot with no client_id.
     if (slot == NO_SLOT) {
         for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
             if (g_slots[i].client_id[0] == '\0') { slot = i; break; }
         }
     }
+    // Finally first unoccupied slot.
     if (slot == NO_SLOT) {
         for (uint8_t i = 0; i < MAX_PLAYERS; ++i) {
             if (!g_slots[i].occupied) { slot = i; break; }
@@ -189,12 +204,35 @@ class IdentityCb : public NimBLECharacteristicCallbacks {
                 return;
             }
         }
-        char client_id[CLIENT_ID_MAX];
-        memcpy(client_id, v.data(), v.size());
-        client_id[v.size()] = '\0';
 
+        // Optional preferred-slot suffix: "<client_id>|N" where N is '0'..'3'.
+        // Strip the suffix before storing the client_id.
+        uint8_t preferred = NO_SLOT;
+        size_t  id_len    = v.size();
+        if (id_len >= 3 && v[id_len - 2] == '|') {
+            char digit = v[id_len - 1];
+            if (digit >= '0' && digit <= '3') {
+                preferred = static_cast<uint8_t>(digit - '0');
+                id_len   -= 2;  // strip "|"+digit
+            }
+        }
+
+        char client_id[CLIENT_ID_MAX];
+        memcpy(client_id, v.data(), id_len);
+        client_id[id_len] = '\0';
+
+        // If this conn already holds a slot, release it so we can re-assign.
         uint16_t conn = info.getConnHandle();
-        uint8_t slot = claimSlot(client_id, conn);
+        uint8_t  old  = slotForConn(conn);
+        if (old != NO_SLOT && old != preferred) {
+            portENTER_CRITICAL(&g_slot_mux);
+            g_slots[old].occupied    = false;
+            g_slots[old].conn_handle = NO_CONN;
+            portEXIT_CRITICAL(&g_slot_mux);
+            g_presence_dirty.store(true, std::memory_order_relaxed);
+        }
+
+        uint8_t slot = claimSlot(client_id, conn, preferred);
         notifySlot(conn, slot);
         if (slot == NO_SLOT) {
             LOGW("BLE", "no slot for client '%s' — disconnecting conn=%u",
@@ -203,8 +241,8 @@ class IdentityCb : public NimBLECharacteristicCallbacks {
             return;
         }
         clearPending(conn);
-        LOGI("BLE", "slot %u <- conn=%u client='%s'",
-             (unsigned)slot, (unsigned)conn, client_id);
+        LOGI("BLE", "slot %u <- conn=%u client='%s' preferred=%u",
+             (unsigned)slot, (unsigned)conn, client_id, (unsigned)preferred);
     }
 };
 
