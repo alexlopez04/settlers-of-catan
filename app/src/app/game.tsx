@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Modal,
@@ -61,6 +62,110 @@ import {
 
 // ── Player avatar text colours (must stay in sync with PLAYER_FILL in board-map) ──
 const PLAYER_TEXT_COLOR = ['#ffffff', '#ffffff', '#ffffff', '#ffffff'] as const;
+
+// ── PlayerNumberSheet ─────────────────────────────────────────────────────────
+// Bottom sheet that lets the current player switch to any disconnected slot.
+
+interface PlayerNumberSheetProps {
+  visible: boolean;
+  onClose: () => void;
+  myId: number;
+  connectedMask: number;
+  onSelect: (slot: number) => void;
+  theme: ReturnType<typeof useTheme>;
+}
+
+function PlayerNumberSheet({
+  visible, onClose, myId, connectedMask, onSelect, theme,
+}: PlayerNumberSheetProps) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent>
+      <Pressable style={pn.backdrop} onPress={onClose} />
+      <View style={[pn.sheet, { backgroundColor: theme.background }]}>
+        <View style={[pn.handle, { backgroundColor: theme.textSecondary }]} />
+        <Text style={[pn.title, { color: theme.text }]}>Change Player Number</Text>
+        <Text style={[pn.subtitle, { color: theme.textSecondary }]}>
+          Select any currently disconnected slot to take over that player number.
+        </Text>
+        <View style={pn.grid}>
+          {[0, 1, 2, 3].map(slot => {
+            const isMe         = slot === myId;
+            const isConnected  = Boolean(connectedMask & (1 << slot));
+            const unavailable  = isConnected && !isMe;
+            return (
+              <Pressable
+                key={slot}
+                onPress={() => {
+                  if (!unavailable && !isMe) onSelect(slot);
+                }}
+                disabled={unavailable || isMe}
+                accessibilityLabel={`Player ${slot + 1}${isMe ? ' (you)' : isConnected ? ' (connected)' : ' (disconnected)'}`}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  pn.slotBtn,
+                  { backgroundColor: PLAYER_FILL[slot], opacity: unavailable ? 0.35 : pressed ? 0.75 : 1 },
+                  isMe && pn.slotBtnMe,
+                ]}>
+                <Text style={pn.slotNum}>P{slot + 1}</Text>
+                <Text style={pn.slotStatus}>
+                  {isMe ? 'You' : isConnected ? 'Connected' : 'Open'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const pn = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  sheet: {
+    borderTopLeftRadius:  20,
+    borderTopRightRadius: 20,
+    paddingTop:           Spacing.two,
+    paddingHorizontal:    Spacing.four,
+    paddingBottom:        Spacing.six,
+    gap:                  Spacing.three,
+  },
+  handle: {
+    width:        40,
+    height:       4,
+    borderRadius: 2,
+    alignSelf:    'center',
+    opacity:      0.35,
+    marginBottom: Spacing.one,
+  },
+  title:    { fontSize: 17, fontWeight: '700' },
+  subtitle: { fontSize: 13, lineHeight: 18 },
+  grid: {
+    flexDirection:  'row',
+    justifyContent: 'space-between',
+    gap:            Spacing.two,
+  },
+  slotBtn: {
+    flex:           1,
+    borderRadius:   14,
+    paddingVertical: Spacing.four,
+    alignItems:     'center',
+    gap:            4,
+  },
+  slotBtnMe: {
+    borderWidth: 2.5,
+    borderColor: 'rgba(255,255,255,0.8)',
+  },
+  slotNum:    { fontSize: 18, fontWeight: '800', color: '#fff' },
+  slotStatus: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
+});
 
 // ── Expanded board overlay ────────────────────────────────────────────────────
 // Rendered as an absolute-fill View (not a Modal) so that PlacementToast and
@@ -250,6 +355,94 @@ const cs = StyleSheet.create({
   rollHint:  { fontSize: 13, fontWeight: '500' },
 });
 
+// ── Reconnecting overlay ──────────────────────────────────────────────────────
+// Shown when BLE drops and the grace period has elapsed. Blocks interaction
+// while the app searches for the board. The user can tap Disconnect to bail.
+
+function ReconnectingOverlay({
+  visible,
+  boardName,
+  onDisconnect,
+  theme,
+}: {
+  visible: boolean;
+  boardName: string | null;
+  onDisconnect: () => void;
+  theme: Theme;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent>
+      <View style={recon.backdrop}>
+        <View style={[recon.card, { backgroundColor: theme.background }]}>
+          <ActivityIndicator size="large" color={theme.primary} style={recon.spinner} />
+          <Text style={[recon.title, { color: theme.text }]}>Reconnecting…</Text>
+          <Text style={[recon.subtitle, { color: theme.textSecondary }]}>
+            Searching for {boardName ?? 'the board'}…
+          </Text>
+          <Pressable
+            onPress={onDisconnect}
+            style={({ pressed }) => [
+              recon.disconnectBtn,
+              { borderColor: theme.textSecondary, opacity: pressed ? 0.6 : 1 },
+            ]}
+            accessibilityLabel="Disconnect from board"
+            accessibilityRole="button">
+            <Text style={[recon.disconnectText, { color: theme.textSecondary }]}>Disconnect</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const recon = StyleSheet.create({
+  backdrop: {
+    flex:            1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  card: {
+    width:            280,
+    borderRadius:     20,
+    paddingVertical:  Spacing.six,
+    paddingHorizontal: Spacing.five,
+    alignItems:       'center',
+    gap:              Spacing.three,
+    shadowColor:      '#000',
+    shadowOffset:     { width: 0, height: 4 },
+    shadowOpacity:    0.25,
+    shadowRadius:     12,
+    elevation:        8,
+  },
+  spinner: { marginBottom: Spacing.one },
+  title: {
+    fontSize:   20,
+    fontWeight: '700',
+    textAlign:  'center',
+  },
+  subtitle: {
+    fontSize:   14,
+    textAlign:  'center',
+    lineHeight: 20,
+  },
+  disconnectBtn: {
+    marginTop:         Spacing.two,
+    borderWidth:       1.5,
+    borderRadius:      12,
+    paddingHorizontal: Spacing.four,
+    paddingVertical:   Spacing.two,
+  },
+  disconnectText: {
+    fontSize:   15,
+    fontWeight: '600',
+  },
+});
+
 // ── Module-level resume-dialog guard ─────────────────────────────────────────
 let resumeAlertShown = false;
 
@@ -331,15 +524,17 @@ export default function GameScreen() {
     sendAction,
     sendInput,
     disconnect,
+    reassignSlot,
   } = useBle();
 
-  const [pendingAction,     setPendingAction]     = useState<PlayerAction | null>(null);
-  const [rejectMessage,     setRejectMessage]     = useState<string | null>(null);
-  const [drawnCard,         setDrawnCard]         = useState<DevCard | null>(null);
-  const [showBoardExpanded, setShowBoardExpanded] = useState(false);
-  const [showDicePopup,     setShowDicePopup]     = useState(false);
-  const [showReorient,      setShowReorient]      = useState(false);
-  const [turnStartCards,    setTurnStartCards]    = useState<number[] | null>(null);
+  const [pendingAction,          setPendingAction]          = useState<PlayerAction | null>(null);
+  const [rejectMessage,          setRejectMessage]          = useState<string | null>(null);
+  const [drawnCard,              setDrawnCard]              = useState<DevCard | null>(null);
+  const [showBoardExpanded,      setShowBoardExpanded]      = useState(false);
+  const [showDicePopup,          setShowDicePopup]          = useState(false);
+  const [showReorient,           setShowReorient]           = useState(false);
+  const [turnStartCards,         setTurnStartCards]         = useState<number[] | null>(null);
+  const [showPlayerNumberSheet,  setShowPlayerNumberSheet]  = useState(false);
 
   // ── Tutorial ──────────────────────────────────────────────────────────────
   const { shouldShowStep, markStepSeen, skipAll: skipTutorial } = useTutorial();
@@ -370,6 +565,7 @@ export default function GameScreen() {
       resumeAlertShown = false;
       router.replace('/');
     }
+    // 'reconnecting' keeps us on the game screen while searching for the board
   }, [connectionState]);
 
   const phase = gameState?.phase ?? GamePhase.LOBBY;
@@ -562,6 +758,12 @@ export default function GameScreen() {
     }
   }, [disconnect, phase]);
 
+  const handleReassign = useCallback(async (targetSlot: number) => {
+    setShowPlayerNumberSheet(false);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try { await reassignSlot(targetSlot); } catch { /* ignore — slot notify will fire */ }
+  }, [reassignSlot]);
+
   const sharedProps = useMemo(() => gameState ? {
     state: gameState,
     myId,
@@ -585,11 +787,16 @@ export default function GameScreen() {
         {/* ── Compact header ──────────────────────────────────────────── */}
         <View style={[s.header, { borderBottomColor: theme.backgroundElement }]}>
           <View style={s.headerLeft}>
-            <View style={[s.playerAvatar, { backgroundColor: PLAYER_FILL[myId] }]}>
+            <Pressable
+              onPress={() => setShowPlayerNumberSheet(true)}
+              hitSlop={8}
+              accessibilityLabel={`You are Player ${myId + 1}. Tap to change player number.`}
+              accessibilityRole="button"
+              style={({ pressed }) => [s.playerAvatar, { backgroundColor: PLAYER_FILL[myId], opacity: pressed ? 0.7 : 1 }]}>
               <Text style={[s.playerAvatarText, { color: PLAYER_TEXT_COLOR[myId] }]}>
                 P{myId + 1}
               </Text>
-            </View>
+            </Pressable>
             <View style={[s.phaseBadge, { backgroundColor: theme.backgroundElement }]}>
               <Text style={[s.phaseText, { color: theme.textSecondary }]}>
                 {PHASE_LABEL[phase]}
@@ -738,6 +945,14 @@ export default function GameScreen() {
         />
       </SafeAreaView>
 
+      {/* ── Reconnecting overlay ──────────────────────────────────────── */}
+      <ReconnectingOverlay
+        visible={connectionState === 'reconnecting'}
+        boardName={connectedName}
+        onDisconnect={disconnect}
+        theme={theme}
+      />
+
       {/* ── Expanded board overlay (below alerts/toasts in render order) ── */}
       <BoardExpandedOverlay
         visible={showBoardExpanded}
@@ -750,6 +965,16 @@ export default function GameScreen() {
 
       {/* ── Re-orient sheet ──────────────────────────────────────────────── */}
       <ReorientSheet visible={showReorient} onClose={() => setShowReorient(false)} tiles={gameState?.tiles} />
+
+      {/* ── Player number picker sheet ───────────────────────────────────── */}
+      <PlayerNumberSheet
+        visible={showPlayerNumberSheet}
+        onClose={() => setShowPlayerNumberSheet(false)}
+        myId={myId}
+        connectedMask={connectedMask}
+        onSelect={handleReassign}
+        theme={theme}
+      />
 
       {/* ── Full-screen overlays ─────────────────────────────────────── */}
       {sharedProps && !showDicePopup && <RobberOverlay {...sharedProps} />}

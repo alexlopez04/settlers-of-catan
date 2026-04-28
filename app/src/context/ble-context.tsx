@@ -29,6 +29,7 @@ import {
   decodeSlot,
   encodeAction,
   encodeIdentity,
+  encodeIdentityWithSlot,
   encodePlayerInput,
 } from '@/services/proto';
 import { useSettings } from '@/context/settings-context';
@@ -79,7 +80,7 @@ export interface ScannedDevice {
   rssi: number | null;
 }
 
-export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnecting';
+export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnecting' | 'reconnecting';
 
 export interface ResourceCounts {
   lumber: number;
@@ -118,9 +119,21 @@ interface BleContextValue {
   connectSimulated: () => void;
   /** Explicitly request Android BLE permissions (no-op on iOS). */
   requestPermissions: () => Promise<boolean>;
+  /**
+   * Re-write the Identity characteristic to request a specific player slot.
+   * The firmware will honour the preference if that slot is not currently
+   * occupied by a live connection.  The slot characteristic notification will
+   * update `playerId` once the firmware processes the request.
+   */
+  reassignSlot: (targetSlot: number) => Promise<void>;
 }
 
 const BleContext = createContext<BleContextValue | null>(null);
+
+/** Milliseconds to wait after a drop before transitioning to 'reconnecting' and scanning. */
+const RECONNECT_GRACE_MS = 3000;
+/** Milliseconds to wait before retrying a scan when reconnect search yields no device. */
+const RECONNECT_RETRY_MS = 2000;
 
 // ── Stable client identifier ────────────────────────────────────────────────
 
@@ -165,6 +178,11 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const slotSubRef = useRef<Subscription | null>(null);
   const disconnectSubRef = useRef<Subscription | null>(null);
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Ref mirror of connectionState — readable inside scan callbacks without stale closure. */
+  const connectionStateRef = useRef<ConnectionState>('idle');
+  /** Ref to latest connect() — allows startScan callback to call it before it is defined. */
+  const connectRef = useRef<((deviceId: string) => Promise<void>) | null>(null);
   const clientIdRef = useRef<string | null>(null);
   /** True while running in simulated-board mode (no real BLE device). */
   const simulatedRef = useRef<boolean>(false);
@@ -176,7 +194,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const [bleState, setBleState] = useState<State>(State.Unknown);
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
-  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
+  const [connectionState, setConnectionStateRaw] = useState<ConnectionState>('idle');
+  /** Wrapper so connectionStateRef is always kept in sync. */
+  const setConnectionState = useCallback((s: ConnectionState) => {
+    connectionStateRef.current = s;
+    setConnectionStateRaw(s);
+  }, []);
   const [connectedName, setConnectedName] = useState<string | null>(null);
   const [clientId, setClientId] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<number | null>(null);
@@ -203,6 +226,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     return () => {
       stateSub.remove();
       if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       mgr.stopDeviceScan();
       mgr.destroy();
     };
@@ -283,6 +307,17 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
             rssi: device.rssi,
           }];
         });
+
+        // Auto-reconnect when we are in reconnecting mode.
+        if (connectionStateRef.current === 'reconnecting') {
+          stopScan();
+          connectRef.current?.(device.id)?.catch(err => {
+            console.warn('[BLE] Auto-reconnect failed:', JSON.stringify(err));
+            // Stay in reconnecting — the retry effect will restart the scan.
+            connectionStateRef.current = 'reconnecting';
+            setConnectionStateRaw('reconnecting');
+          });
+        }
       },
     );
 
@@ -321,6 +356,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       }
 
       stopScan();
+      // Cancel any pending reconnect grace timer so we don't transition to
+      // 'reconnecting' after a successful re-connection.
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       setConnectionState('connecting');
       setPlayerId(null);
 
@@ -337,10 +378,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         disconnectSubRef.current = device.onDisconnected(() => {
           cleanupSubscriptions();
           deviceRef.current = null;
-          setConnectedName(null);
-          setPlayerId(null);
-          setGameState(null);
-          setConnectionState('idle');
+          // Don't wipe UI state immediately — start the grace period so the
+          // user only sees the reconnecting overlay if the drop lasts >3 s.
+          reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null;
+            setConnectionState('reconnecting');
+          }, RECONNECT_GRACE_MS);
         });
 
         // Subscribe to BoardState notifications.
@@ -425,6 +468,23 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     [cleanupSubscriptions, stopScan],
   );
 
+  // Keep connectRef pointing at the latest connect function so startScan's
+  // scan callback can call it without a stale closure.
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  // Restart scan while in reconnecting mode and no scan is running.
+  // Uses a short delay to avoid racing with the auto-connect path.
+  useEffect(() => {
+    if (connectionState !== 'reconnecting') return;
+    if (scanning) return;
+    const t = setTimeout(() => {
+      if (connectionStateRef.current === 'reconnecting') startScan();
+    }, RECONNECT_RETRY_MS);
+    return () => clearTimeout(t);
+  }, [connectionState, scanning, startScan]);
+
   // ── Disconnect ───────────────────────────────────────────────────────────
 
   const disconnect = useCallback(async () => {
@@ -438,8 +498,15 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Cancel any pending reconnect timer and stop ongoing scan.
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    stopScan();
+
     const device = deviceRef.current;
-    setConnectionState('disconnecting');
+    if (device) setConnectionState('disconnecting');
 
     cleanupSubscriptions();
 
@@ -454,7 +521,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     setPlayerId(null);
     setGameState(null);
     setConnectionState('idle');
-  }, [cleanupSubscriptions]);
+  }, [cleanupSubscriptions, stopScan]);
 
   // ── Simulated board ──────────────────────────────────────────────────────
 
@@ -467,6 +534,30 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     setPlayerId(0);
     setConnectedName('Simulated Board');
     setConnectionState('connected');
+  }, []);
+
+  const reassignSlot = useCallback(async (targetSlot: number) => {
+    if (simulatedRef.current) {
+      // In simulation, just flip the local player id directly.
+      setPlayerId(targetSlot);
+      return;
+    }
+    const device = deviceRef.current;
+    if (!device) return;
+    let cid = clientIdRef.current;
+    if (!cid) {
+      cid = await loadOrCreateClientId();
+      clientIdRef.current = cid;
+      setClientId(cid);
+    }
+    console.log('[BLE] reassigning slot to', targetSlot, 'clientId=', cid);
+    await device.writeCharacteristicWithResponseForService(
+      CATAN_SERVICE_UUID,
+      IDENTITY_UUID,
+      encodeIdentityWithSlot(cid, targetSlot),
+    );
+    // The firmware will notify the Slot characteristic; the existing
+    // slotSubRef subscription will update playerId automatically.
   }, []);
 
   // ── Send helpers ─────────────────────────────────────────────────────────
@@ -541,6 +632,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         sendInput,
         connectSimulated,
         requestPermissions,
+        reassignSlot,
       }}>
       {children}
     </BleContext.Provider>

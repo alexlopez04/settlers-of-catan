@@ -596,6 +596,16 @@ export function encodeIdentity(clientId: string): string {
   return bytesToBase64(utf8Bytes(clientId));
 }
 
+/**
+ * Encode an Identity write that requests a specific preferred player slot.
+ * The firmware will honour the preference if that slot is not currently
+ * occupied by a live connection.  Falls back to normal assignment otherwise.
+ * Format sent on the wire: "<clientId>|N"  (N = '0'..'3')
+ */
+export function encodeIdentityWithSlot(clientId: string, preferredSlot: number): string {
+  return bytesToBase64(utf8Bytes(`${clientId}|${preferredSlot & 3}`));
+}
+
 /** Decode a single-byte Slot characteristic value into a player_id (0..3 or NO_PLAYER). */
 export function decodeSlot(base64: string): number {
   const bytes = base64ToBytes(base64);

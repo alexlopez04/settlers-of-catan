@@ -687,9 +687,22 @@ export function IncomingTradeDialog({
 }: CommonProps) {
   const t = state.trade;
 
-  // Visibility: there must be a live offer, not from myself, and directed at
-  // me specifically or broadcast to all opponents.
+  // Track a key representing the current offer so we can reset the dismissed
+  // flag when a genuinely new offer arrives.
+  const tradeKey = `${t.fromPlayer}-${t.toPlayer}-${t.offer.join(',')}-${t.want.join(',')}`;
+  const [dismissed, setDismissed] = useState(false);
+  const prevTradeKeyRef = useRef(tradeKey);
+  useEffect(() => {
+    if (tradeKey !== prevTradeKeyRef.current) {
+      prevTradeKeyRef.current = tradeKey;
+      setDismissed(false);
+    }
+  }, [tradeKey]);
+
+  // Visibility: there must be a live offer, not from myself, directed at
+  // me specifically or broadcast to all opponents, and not locally dismissed.
   const visible =
+    !dismissed &&
     t.fromPlayer !== NO_PLAYER &&
     t.fromPlayer !== myId &&
     (t.toPlayer === NO_PLAYER || t.toPlayer === myId);
@@ -761,7 +774,7 @@ export function IncomingTradeDialog({
           {/* Actions */}
           <View style={[s.tradeButtons, { marginTop: Spacing.two }]}>
             <Pressable
-              onPress={() => sendInput({ action: PlayerAction.TRADE_DECLINE })}
+              onPress={() => { setDismissed(true); sendInput({ action: PlayerAction.TRADE_DECLINE }); }}
               style={[s.btn, { flex: 1, backgroundColor: theme.backgroundSelected }]}>
               <Text style={[s.btnText, { color: theme.text }]}>Decline</Text>
             </Pressable>
