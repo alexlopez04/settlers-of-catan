@@ -65,7 +65,7 @@ export function FadeSlideIn({ children, triggerKey }: {
 
 // ── LobbySlot ─────────────────────────────────────────────────────────────
 
-const PLAYER_TEXT: readonly string[] = ['#ffffff', '#ffffff', '#ffffff', '#1a1a1a'];
+const PLAYER_TEXT: readonly string[] = ['#ffffff', '#ffffff', '#ffffff', '#ffffff'];
 
 function LobbySlot({ index, connected, isMe, theme }: {
   index: number;

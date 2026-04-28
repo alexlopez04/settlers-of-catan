@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -59,7 +60,7 @@ import {
 } from '@/components/game/game-actions';
 
 // ── Player avatar text colours (must stay in sync with PLAYER_FILL in board-map) ──
-const PLAYER_TEXT_COLOR = ['#ffffff', '#ffffff', '#ffffff', '#1a1a1a'] as const;
+const PLAYER_TEXT_COLOR = ['#ffffff', '#ffffff', '#ffffff', '#ffffff'] as const;
 
 // ── Expanded board overlay ────────────────────────────────────────────────────
 // Rendered as an absolute-fill View (not a Modal) so that PlacementToast and
@@ -252,6 +253,70 @@ const cs = StyleSheet.create({
 // ── Module-level resume-dialog guard ─────────────────────────────────────────
 let resumeAlertShown = false;
 
+// ── Re-orient sheet ───────────────────────────────────────────────────────────
+// Slide-up modal that lets the player adjust their board rotation after the
+// lobby (e.g. if they moved seats or need to recalibrate mid-game).
+
+function ReorientSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const theme = useTheme();
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent>
+      {/* Tap-outside backdrop */}
+      <Pressable style={rs.backdrop} onPress={onClose} />
+      <View style={[rs.sheet, { backgroundColor: theme.background }]}>
+        <View style={[rs.handle, { backgroundColor: theme.textSecondary }]} />
+        <LobbyOrientationPicker />
+        <Pressable
+          onPress={onClose}
+          style={[rs.doneBtn, { backgroundColor: theme.primary }]}
+          accessibilityLabel="Done"
+          accessibilityRole="button">
+          <Text style={rs.doneBtnText}>Done</Text>
+        </Pressable>
+      </View>
+    </Modal>
+  );
+}
+
+const rs = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  sheet: {
+    borderTopLeftRadius:  20,
+    borderTopRightRadius: 20,
+    paddingTop:           Spacing.two,
+    paddingHorizontal:    Spacing.four,
+    paddingBottom:        Spacing.six,
+    alignItems:           'stretch',
+    gap:                  Spacing.three,
+  },
+  handle: {
+    width:        40,
+    height:       4,
+    borderRadius: 2,
+    alignSelf:    'center',
+    opacity:      0.35,
+    marginBottom: Spacing.one,
+  },
+  doneBtn: {
+    borderRadius:   14,
+    paddingVertical: Spacing.three,
+    alignItems:      'center',
+  },
+  doneBtnText: {
+    color:      '#fff',
+    fontSize:   16,
+    fontWeight: '700',
+  },
+});
+
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function GameScreen() {
@@ -273,6 +338,7 @@ export default function GameScreen() {
   const [drawnCard,         setDrawnCard]         = useState<DevCard | null>(null);
   const [showBoardExpanded, setShowBoardExpanded] = useState(false);
   const [showDicePopup,     setShowDicePopup]     = useState(false);
+  const [showReorient,      setShowReorient]      = useState(false);
   const [turnStartCards,    setTurnStartCards]    = useState<number[] | null>(null);
 
   // ── Tutorial ──────────────────────────────────────────────────────────────
@@ -539,6 +605,16 @@ export default function GameScreen() {
             style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
             <SFSymbolIcon name="book.closed" size={22} color={theme.textSecondary} fallback="📖" />
           </Pressable>
+          {!isLobby && (
+            <Pressable
+              onPress={() => setShowReorient(true)}
+              hitSlop={12}
+              accessibilityLabel="Re-orient board"
+              accessibilityRole="button"
+              style={({ pressed }) => [s.headerBtn, { opacity: pressed ? 0.5 : 1 }]}>
+              <SFSymbolIcon name="rotate.3d" size={22} color={theme.textSecondary} fallback="⟳" />
+            </Pressable>
+          )}
           <Pressable
             onPress={handleDisconnect}
             hitSlop={12}
@@ -671,6 +747,9 @@ export default function GameScreen() {
         debug={debug}
         theme={theme}
       />
+
+      {/* ── Re-orient sheet ──────────────────────────────────────────────── */}
+      <ReorientSheet visible={showReorient} onClose={() => setShowReorient(false)} />
 
       {/* ── Full-screen overlays ─────────────────────────────────────── */}
       {sharedProps && !showDicePopup && <RobberOverlay {...sharedProps} />}
