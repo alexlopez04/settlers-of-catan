@@ -58,6 +58,7 @@ import {
   Scoreboard,
   DrawnDevCardModal,
   DiceRollPopup,
+  YourTurnAlert,
 } from '@/components/game/game-actions';
 
 // ── Player avatar text colours (must stay in sync with PLAYER_FILL in board-map) ──
@@ -987,6 +988,7 @@ export default function GameScreen() {
         theme={theme}
       />
       <PlacementToast message={rejectMessage} onClose={() => setRejectMessage(null)} theme={theme} />
+      <YourTurnAlert myTurn={myTurn} theme={theme} />
       <DiceRollPopup
         visible={showDicePopup}
         die1={gameState?.die1 ?? 1}

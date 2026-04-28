@@ -1405,6 +1405,49 @@ export function DiceRollPopup({
   );
 }
 
+// ── Your Turn alert ────────────────────────────────────────────────────────
+
+export function YourTurnAlert({ myTurn, theme }: Pick<CommonProps, 'myTurn' | 'theme'>) {
+  const scale   = useRef(new Animated.Value(0.6)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  const prevRef = useRef(false);
+
+  useEffect(() => {
+    const wasMyTurn = prevRef.current;
+    prevRef.current = myTurn;
+
+    if (!myTurn || wasMyTurn) return;
+
+    // Reset
+    scale.setValue(0.6);
+    opacity.setValue(0);
+
+    Animated.sequence([
+      // Spring in
+      Animated.parallel([
+        Animated.spring(scale, { toValue: 1, friction: 5, tension: 300, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 120, useNativeDriver: true }),
+      ]),
+      Animated.delay(900),
+      // Fade out
+      Animated.timing(opacity, { toValue: 0, duration: 350, useNativeDriver: true }),
+    ]).start();
+  }, [myTurn]);
+
+  return (
+    <View style={s.yourTurnOverlay} pointerEvents="none">
+      <Animated.View
+        style={[
+          s.yourTurnAlert,
+          { backgroundColor: theme.primary, opacity, transform: [{ scale }] },
+        ]}
+      >
+        <Text style={s.yourTurnText}>Your Turn</Text>
+      </Animated.View>
+    </View>
+  );
+}
+
 // ── Scoreboard ──────────────────────────────────────────────────────────────
 
 export function Scoreboard({ state, myId, theme }: CommonProps) {
@@ -1676,4 +1719,27 @@ const s = StyleSheet.create({
   dicePopupHint: { fontSize: 11, fontWeight: '500' },
   diceResourceRow: { flexDirection: 'row', gap: Spacing.one, flexWrap: 'wrap', justifyContent: 'center' },
   dicePopupNoRes: { fontSize: 12, fontWeight: '500' },
+
+  // Your Turn alert
+  yourTurnOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  yourTurnAlert: {
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  yourTurnText: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#fff',
+    letterSpacing: 0.5,
+  },
 });
