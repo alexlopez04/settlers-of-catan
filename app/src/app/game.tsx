@@ -257,7 +257,7 @@ let resumeAlertShown = false;
 // Slide-up modal that lets the player adjust their board rotation after the
 // lobby (e.g. if they moved seats or need to recalibrate mid-game).
 
-function ReorientSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function ReorientSheet({ visible, onClose, tiles }: { visible: boolean; onClose: () => void; tiles?: BoardState['tiles'] }) {
   const theme = useTheme();
   return (
     <Modal
@@ -270,7 +270,7 @@ function ReorientSheet({ visible, onClose }: { visible: boolean; onClose: () => 
       <Pressable style={rs.backdrop} onPress={onClose} />
       <View style={[rs.sheet, { backgroundColor: theme.background }]}>
         <View style={[rs.handle, { backgroundColor: theme.textSecondary }]} />
-        <LobbyOrientationPicker />
+        <LobbyOrientationPicker tiles={tiles} />
         <Pressable
           onPress={onClose}
           style={[rs.doneBtn, { backgroundColor: theme.primary }]}
@@ -749,7 +749,7 @@ export default function GameScreen() {
       />
 
       {/* ── Re-orient sheet ──────────────────────────────────────────────── */}
-      <ReorientSheet visible={showReorient} onClose={() => setShowReorient(false)} />
+      <ReorientSheet visible={showReorient} onClose={() => setShowReorient(false)} tiles={gameState?.tiles} />
 
       {/* ── Full-screen overlays ─────────────────────────────────────── */}
       {sharedProps && !showDicePopup && <RobberOverlay {...sharedProps} />}

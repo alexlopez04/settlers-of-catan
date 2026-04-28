@@ -23,13 +23,23 @@ import { BoardMap } from '@/components/ui/board-map';
 import { useTheme } from '@/hooks/use-theme';
 import { SFSymbolIcon } from '@/components/ui/symbol';
 import { Spacing } from '@/constants/theme';
+import type { Tile } from '@/services/proto';
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function LobbyOrientationPicker() {
+interface LobbyOrientationPickerProps {
+  /** When provided, renders the real tile biome colours instead of the
+   *  orientation-pattern highlight. Use this when tiles are already known
+   *  (i.e. after the lobby). */
+  tiles?: Tile[] | null;
+}
+
+export function LobbyOrientationPicker({ tiles }: LobbyOrientationPickerProps = {}) {
   const theme                      = useTheme();
   const { boardRotation, setBoardRotation } = useSettings();
   const { width }                  = useWindowDimensions();
+
+  const hasTiles = (tiles?.length ?? 0) > 0;
 
   // Map fills the available width, capped at a comfortable size.
   const mapSize = Math.min(width - Spacing.four * 2 - 80, 280);
@@ -47,7 +57,9 @@ export function LobbyOrientationPicker() {
       </Text>
 
       <Text style={[s.hint, { color: theme.textSecondary }]}>
-        Rotate until the glowing tiles match your view of the physical board.
+        {hasTiles
+          ? 'Rotate until the board matches your view of the physical board.'
+          : 'Rotate until the glowing tiles match your view of the physical board.'}
       </Text>
 
       {/* Map + rotate buttons in a row */}
@@ -69,10 +81,10 @@ export function LobbyOrientationPicker() {
         </Pressable>
 
         <BoardMap
-          tiles={null}
+          tiles={hasTiles ? tiles : null}
           rotation={boardRotation}
           size={mapSize}
-          showOrientationPattern
+          showOrientationPattern={!hasTiles}
           showPorts={false}
         />
 
