@@ -241,15 +241,6 @@ export function BoardMap({
                 strokeWidth={hs * 0.06}
               />
 
-              {/* Tappable hit-target overlay (slightly transparent) */}
-              {pressable && (
-                <Polygon
-                  points={polygonPoints(t)}
-                  fill="transparent"
-                  stroke="transparent"
-                />
-              )}
-
               {/* Number token — shows resource label above, number below */}
               {hasTileData && tileNum != null && tileNum > 0 && (
                 <G>
@@ -318,6 +309,16 @@ export function BoardMap({
                   fill="#00e000">
                   {`T${t}`}
                 </SvgText>
+              )}
+
+              {/* Tappable hit-target overlay — rendered last so it sits on
+                  top of number tokens / robber marker and captures touches */}
+              {pressable && (
+                <Polygon
+                  points={polygonPoints(t)}
+                  fill="transparent"
+                  stroke="transparent"
+                />
               )}
             </G>
           );
