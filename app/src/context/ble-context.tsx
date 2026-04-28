@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { BleManager, Device, State, Subscription } from 'react-native-ble-plx';
 
 import {
@@ -32,6 +33,43 @@ import {
 } from '@/services/proto';
 import { useSettings } from '@/context/settings-context';
 import { applySimulatedAction, createSimulatedState } from '@/services/sim-board';
+
+// ── Android BLE permission helper ────────────────────────────────────────────
+
+/**
+ * Request the Android runtime permissions needed for BLE scanning.
+ * - Android 12+ (API 31+): BLUETOOTH_SCAN + BLUETOOTH_CONNECT
+ *   (neverForLocation flag in the manifest means no location perm needed)
+ * - Android 6–11: ACCESS_FINE_LOCATION (required by the BLE scan API)
+ * Returns true when all required permissions are granted.
+ */
+async function requestAndroidBlePermissions(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+
+  if (Platform.Version >= 31) {
+    const results = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+    ]);
+    return (
+      results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN]   === PermissionsAndroid.RESULTS.GRANTED &&
+      results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED
+    );
+  }
+
+  // Android 6–11: location permission is the gating requirement.
+  const result = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    {
+      title: 'Location permission required',
+      message:
+        'Catan needs location access to scan for Bluetooth devices on this version of Android.',
+      buttonPositive: 'Grant',
+      buttonNegative: 'Deny',
+    },
+  );
+  return result === PermissionsAndroid.RESULTS.GRANTED;
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -62,6 +100,14 @@ interface BleContextValue {
   /** Player slot (0..3) assigned by the hub via the Slot characteristic. */
   playerId: number | null;
   gameState: BoardState | null;
+  /**
+   * Whether BLE runtime permissions have been granted.
+   * Always `true` on iOS. On Android:
+   *   - `null`  — not yet checked (before first scan attempt)
+   *   - `true`  — all required permissions granted
+   *   - `false` — one or more permissions denied
+   */
+  blePermissionsGranted: boolean | null;
   startScan: () => void;
   stopScan: () => void;
   connect: (deviceId: string) => Promise<void>;
@@ -70,6 +116,8 @@ interface BleContextValue {
   sendInput: (input: Partial<PlayerInput> & { action: PlayerAction }) => Promise<void>;
   /** Immediately enter a fully-simulated game session (no BLE hardware needed). */
   connectSimulated: () => void;
+  /** Explicitly request Android BLE permissions (no-op on iOS). */
+  requestPermissions: () => Promise<boolean>;
 }
 
 const BleContext = createContext<BleContextValue | null>(null);
@@ -133,6 +181,10 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const [clientId, setClientId] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<number | null>(null);
   const [gameState, setGameState] = useState<BoardState | null>(null);
+  // null = not yet checked; true/false = result of last permission request.
+  const [blePermissionsGranted, setBlePermissionsGranted] = useState<boolean | null>(
+    Platform.OS !== 'android' ? true : null,
+  );
 
   // Manager + persistent client_id boot
   useEffect(() => {
@@ -167,11 +219,21 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     setScanning(false);
   }, []);
 
-  const startScan = useCallback(() => {
+  const startScan = useCallback(async () => {
     const mgr = managerRef.current;
     if (!mgr || bleState !== State.PoweredOn) {
       console.log('[BLE] startScan skipped: mgr=', !!mgr, 'bleState=', bleState);
       return;
+    }
+
+    // On Android, runtime BLE permissions must be granted before scanning.
+    if (Platform.OS === 'android') {
+      const granted = await requestAndroidBlePermissions();
+      setBlePermissionsGranted(granted);
+      if (!granted) {
+        console.warn('[BLE] Android BLE permissions not granted — scan aborted.');
+        return;
+      }
     }
 
     setDevices([]);
@@ -228,6 +290,16 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   }, [bleState, stopScan]);
 
   // ── Connect ─────────────────────────────────────────────────────────────
+
+  const requestPermissions = useCallback(async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') {
+      setBlePermissionsGranted(true);
+      return true;
+    }
+    const granted = await requestAndroidBlePermissions();
+    setBlePermissionsGranted(granted);
+    return granted;
+  }, []);
 
   const cleanupSubscriptions = useCallback(() => {
     stateSubRef.current?.remove(); stateSubRef.current = null;
@@ -460,6 +532,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         clientId,
         playerId,
         gameState,
+        blePermissionsGranted,
         startScan,
         stopScan,
         connect,
@@ -467,6 +540,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         sendAction,
         sendInput,
         connectSimulated,
+        requestPermissions,
       }}>
       {children}
     </BleContext.Provider>

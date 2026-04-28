@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -21,7 +22,7 @@ import { SFSymbolIcon } from '@/components/ui/symbol';
 
 export default function ScanScreen() {
   const theme = useTheme();
-  const { bleState, scanning, devices, connectionState, startScan, stopScan, connect, connectSimulated } = useBle();
+  const { bleState, scanning, devices, connectionState, startScan, stopScan, connect, connectSimulated, blePermissionsGranted, requestPermissions } = useBle();
   const { debug } = useSettings();
   const [connectingTo, setConnectingTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -118,6 +119,29 @@ export default function ScanScreen() {
   );
 
   const bleBanner = () => {
+    // Android: permissions not yet granted (null = not yet requested, false = denied).
+    if (Platform.OS === 'android' && blePermissionsGranted === false) {
+      return (
+        <View style={[styles.banner, { backgroundColor: theme.backgroundElement }]}>
+          <SFSymbolIcon name="lock.shield" size={18} color={theme.text} fallback="🔒" />
+          <View style={styles.bannerTextCol}>
+            <Text style={[styles.bannerText, { color: theme.text }]}>
+              Bluetooth permissions are required.
+            </Text>
+            <Pressable
+              onPress={async () => {
+                const granted = await requestPermissions();
+                if (granted) startScan();
+              }}
+              style={({ pressed }) => [styles.permissionBtn, { opacity: pressed ? 0.7 : 1 }]}>
+              <Text style={[styles.permissionBtnText, { color: theme.primary }]}>
+                Grant Permissions
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
     if (bleState === State.PoweredOff) {
       return (
         <View style={[styles.banner, { backgroundColor: theme.backgroundElement }]}>
@@ -318,6 +342,18 @@ const styles = StyleSheet.create({
   bannerText: {
     fontSize: 15,
     flex: 1,
+  },
+  bannerTextCol: {
+    flex: 1,
+    gap: Spacing.one,
+  },
+  permissionBtn: {
+    alignSelf: 'flex-start',
+    paddingTop: Spacing.one,
+  },
+  permissionBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   scanStatus: {
     paddingHorizontal: Spacing.four,

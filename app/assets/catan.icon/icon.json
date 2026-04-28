@@ -34,8 +34,8 @@
           ],
           "glass" : true,
           "hidden" : false,
-          "image-name" : "Frame 1 (6).png",
-          "name" : "Frame 1 (6)",
+          "image-name" : "hexagon.png",
+          "name" : "Hexagon",
           "position" : {
             "scale" : 2,
             "translation-in-points" : [
